@@ -51,9 +51,11 @@ jobs:
             kubectl -n argocd scale deployment/argocd-dex-server deployment/argocd-notifications-controller --replicas=0 || true
             kubectl -n argocd rollout status deployment/argocd-server deployment/argocd-repo-server deployment/argocd-applicationset-controller --timeout=300s
             kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
-            # ApplicationSet không dùng (chỉ có Application thường): tắt để trả CPU/RAM cho ứng dụng
-            kubectl -n argocd scale deployment/argocd-applicationset-controller --replicas=0 || true
           fi
+          # Chạy mỗi lần (kể cả khi Argo CD đã có sẵn): tắt các thành phần không dùng để trả CPU/RAM cho ứng dụng.
+          # ApplicationSet: chỉ dùng Application thường. Dex: không đăng nhập SSO. Notifications: không gửi thông báo.
+          kubectl -n argocd scale deployment/argocd-applicationset-controller deployment/argocd-dex-server \
+            deployment/argocd-notifications-controller --replicas=0 || true
           GRAFANA_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/greenmart-${CLUSTER_NAME}-grafana"
           aws iam get-role --role-name "greenmart-${CLUSTER_NAME}-grafana" >/dev/null || { echo "Thiếu role Grafana: chạy Terraform với enable_monitoring=true"; exit 1; }
           echo "GRAFANA_ROLE_ARN=$GRAFANA_ROLE_ARN" >> "$GITHUB_ENV"
