@@ -1,0 +1,70 @@
+# order-worker: nhận sự kiện "đơn hoàn tất" từ Amazon SQS rồi gọi catalog-service trừ tồn kho.
+# Cùng image với order-service, chạy lệnh consume_order_events thay cho gunicorn (xem docker/entrypoint.sh).
+# ServiceAccount order-worker (quyền đọc/xóa tin SQS bằng IRSA) và ConfigMap greenmart-infra do Terraform tạo.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-worker
+  labels:
+    app.kubernetes.io/name: order-worker
+    app.kubernetes.io/part-of: greenmart
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: order-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: order-worker
+        app.kubernetes.io/part-of: greenmart
+    spec:
+      serviceAccountName: order-worker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40   # long polling 20s + xử lý nốt lô đang nhận
+      containers:
+      - name: worker
+        image: docker.io/noobcoder1219/order-service   # overlay đổi sang image ECR (cùng tên với order-service)
+        imagePullPolicy: IfNotPresent
+        args: ["python", "manage.py", "consume_order_events"]
+        envFrom:
+        - configMapRef:
+            name: greenmart-config
+        - configMapRef:
+            name: greenmart-infra
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: greenmart-secrets
+              key: SECRET_KEY
+        - name: INTERNAL_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: greenmart-secrets
+              key: INTERNAL_API_TOKEN
+        - name: DB_NAME
+          value: order_db
+        - name: DB_USER
+          value: order_svc
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: greenmart-secrets
+              key: ORDER_DB_PASSWORD
+        - name: RUN_MIGRATE
+          value: '0'
+        - name: ENABLE_PROMETHEUS
+          value: '0'
+        resources:
+          requests:
+            cpu: 20m
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL

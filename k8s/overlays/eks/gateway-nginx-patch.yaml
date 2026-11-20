@@ -1,22 +1,33 @@
-# Không có volume dùng chung (EBS chỉ gắn được 1 pod/lần) => gateway không đọc ảnh trực tiếp
-# mà proxy /media/ về catalog-service (service này sở hữu volume EBS và tự phục vụ ảnh).
+# Ảnh sản phẩm nằm trên S3 (Terraform: infra/terraform/s3-media.tf). Gateway chuyển /media/ tới bucket qua
+# VPC endpoint; bucket policy chỉ cho đọc từ endpoint này nên không cần ký request, bucket vẫn private.
+# media.conf.template: image nginx tự thay ${MEDIA_BUCKET}/${AWS_REGION} (lấy từ ConfigMap greenmart-infra) khi khởi động
+# và ghi ra /etc/nginx/conf.d/media.conf.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: gateway-nginx
 data:
   nginx.conf: |
-    events {}
+    # Mặc định nginx chỉ có 1 worker, 512 kết nối: lúc tải cao ALB nhận 502. Mỗi CPU một worker, 4096 kết nối/worker.
+    worker_processes auto;
+    worker_rlimit_nofile 16384;
+    events { worker_connections 4096; multi_accept on; }
 
     http {
         include       /etc/nginx/mime.types;
         client_max_body_size 10m;
+        sendfile on;
+        tcp_nopush on;
+        keepalive_timeout 65;
+        gzip on;
+        gzip_min_length 1024;
+        gzip_types text/css application/javascript application/json image/svg+xml text/plain;
 
         map $http_x_forwarded_proto $fwd_proto { default $http_x_forwarded_proto; "" $scheme; }
 
-        upstream web             { server web:8000; }
-        upstream user_service    { server user-service:8000; }
-        upstream catalog_service { server catalog-service:8000; }
+        upstream web             { server web:8000; keepalive 32; }
+        upstream user_service    { server user-service:8000; keepalive 32; }
+        upstream catalog_service { server catalog-service:8000; keepalive 32; }
 
         server {
             listen 80;
@@ -25,11 +36,32 @@ data:
 
             location = /metrics { return 404; }
             
-            location /static/ { alias /staticfiles/; }
-            location /media/  { proxy_pass http://catalog_service; include /etc/nginx/proxy_params; }
+            location /static/ { alias /staticfiles/; expires 1d; add_header Cache-Control "public"; access_log off; }
+            include /etc/nginx/conf.d/media.conf;
 
             location /admin/catalog/ { proxy_pass http://catalog_service; include /etc/nginx/proxy_params; }
             location /admin/         { proxy_pass http://user_service;    include /etc/nginx/proxy_params; }
             location /               { proxy_pass http://web;             include /etc/nginx/proxy_params; }
         }
     }
+  media.conf.template: |
+    location /media/ {
+        resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+        set $media_host ${MEDIA_BUCKET}.s3.${AWS_REGION}.amazonaws.com;
+        proxy_pass https://$media_host;
+        proxy_ssl_server_name on;
+        proxy_http_version 1.1;
+        proxy_set_header Host $media_host;
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_hide_header Set-Cookie;
+        proxy_intercept_errors on;
+        error_page 403 = @media_missing;
+        expires 30d;
+        add_header Cache-Control "public";
+        access_log off;
+    }
+    # S3 trả 403 (không phải 404) khi key không tồn tại và người đọc không có quyền List.
+    location @media_missing { return 404; }

@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from greenmart_common.client import NotFound
 
 from .clients import fetch_products, promotions
+from .events import publish_order_completed
 from .models import Order, OrderItem
 from .pricing import promotion_snapshot_dict, serialize_order
 
@@ -201,6 +202,7 @@ class CompleteOrderView(APIView):
             order.complete = True
             order.save()
         order = Order.objects.prefetch_related("items").get(pk=order.pk)
+        publish_order_completed(order)  # sau khi commit: order-worker trừ tồn kho (chỉ khi có ORDER_EVENTS_QUEUE_URL)
         return Response(serialize_order(order, products))
 
 

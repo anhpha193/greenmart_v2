@@ -10,4 +10,5 @@ urlpatterns = [
     path("products/<slug:slug>/reviews/", views.ProductReviewCreateView.as_view()),
     path("reviews/<int:review_id>/reply/", views.ReviewReplyView.as_view()),
     path("stats/", views.StatsView.as_view()),
+    path("stock/apply-order/", views.ApplyOrderStockView.as_view()),
 ]

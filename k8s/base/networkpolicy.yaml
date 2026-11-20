@@ -115,6 +115,10 @@ spec:
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: order-service
+    # order-worker (overlay EKS) gọi catalog-service trừ tồn kho sau khi đơn hoàn tất
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: order-worker
     ports:
     - protocol: TCP
       port: 8000

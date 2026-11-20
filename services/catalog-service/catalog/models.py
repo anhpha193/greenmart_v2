@@ -86,3 +86,14 @@ class Review(models.Model):
     @property
     def is_parent(self):
         return self.parent_id is None
+
+
+class OrderStockApplied(models.Model):
+    """Đơn hàng đã được trừ tồn kho. Khóa duy nhất theo order_id: order-worker nhận lại cùng một tin nhắn SQS
+    (SQS giao ít nhất một lần) thì không trừ kho hai lần."""
+
+    order_id = models.BigIntegerField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"order {self.order_id}"

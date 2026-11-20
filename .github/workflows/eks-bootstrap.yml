@@ -1,6 +1,6 @@
 # Bootstrap cluster EKS mới: OIDC provider + AWS Load Balancer Controller + ứng dụng mẫu 2048.
 # Chạy tay (Actions > EKS bootstrap > Run workflow) hoặc gọi từ workflow tạo cluster bằng `workflow_call`.
-# Cần secret AWS_ROLE_TO_ASSUME: IAM role tin cậy GitHub OIDC, đủ quyền (xem infra/eks-bootstrap/README.md)
+# Cần secret AWS_ROLE_TO_ASSUME: IAM role tin cậy GitHub OIDC, đủ quyền (xem README.md ở thư mục gốc)
 # và đã là admin của cluster (người tạo cluster, hoặc EKS access entry).
 name: EKS bootstrap
 

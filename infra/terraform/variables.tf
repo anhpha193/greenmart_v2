@@ -99,13 +99,49 @@ variable "email_host_password" {
   sensitive   = true
 }
 variable "enable_monitoring" {
-  description = "Tạo addon CloudWatch Container Insights, role IRSA (Grafana, X-Ray daemon) và luật lấy mẫu X-Ray."
+  description = "Tạo role IRSA cho Grafana đọc metric CloudWatch của ALB/RDS/ElastiCache/SQS/CloudFront (chỉ đọc). Giám sát chính là Prometheus + Grafana."
   type        = bool
   default     = true
 }
 
-variable "xray_sample_rate" {
-  description = "Tỉ lệ lấy mẫu trace X-Ray cho request thường (1 = ghi 100%, dùng khi so sánh số request với Prometheus; hạ xuống để giảm chi phí)."
-  type        = number
-  default     = 1
+# ---------- ElastiCache (Valkey) ----------
+variable "enable_cache" {
+  description = "Tạo ElastiCache Valkey cho session + cache. false = ứng dụng dùng cache trong bộ nhớ, session trong MySQL."
+  type        = bool
+  default     = true
+}
+
+variable "cache_node_type" {
+  description = "Loại node Valkey. cache.t4g.micro là loại nhỏ nhất (Free plan: trừ credit)."
+  type        = string
+  default     = "cache.t4g.micro"
+}
+
+variable "cache_engine_version" {
+  type    = string
+  default = "8.0"
+}
+
+variable "cache_parameter_group" {
+  type    = string
+  default = "default.valkey8"
+}
+
+# ---------- S3 ảnh sản phẩm ----------
+variable "media_force_destroy" {
+  description = "true = terraform destroy xóa bucket kể cả khi còn ảnh (môi trường thử)."
+  type        = bool
+  default     = true
+}
+
+variable "create_s3_vpc_endpoint" {
+  description = "Tạo VPC gateway endpoint cho S3 (miễn phí). false nếu VPC đã có, khi đó truyền s3_vpc_endpoint_id."
+  type        = bool
+  default     = true
+}
+
+variable "s3_vpc_endpoint_id" {
+  description = "ID VPC endpoint S3 có sẵn (chỉ dùng khi create_s3_vpc_endpoint = false)."
+  type        = string
+  default     = ""
 }

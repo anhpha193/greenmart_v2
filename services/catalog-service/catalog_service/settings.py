@@ -1,6 +1,7 @@
 """catalog-service: danh mục, sản phẩm, đánh giá. Database riêng: catalog_db (MySQL)."""
 from pathlib import Path
 
+from greenmart_common.cache import cache_settings
 from greenmart_common.env import env, env_bool, env_list, mysql_database
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -58,12 +59,25 @@ STATIC_URL = "/static/"
 STATIC_ROOT = env("STATIC_ROOT", "/staticfiles")
 MEDIA_URL = "/media/"
 MEDIA_ROOT = env("MEDIA_ROOT", "/media")
+
+# Có MEDIA_BUCKET (EKS, Terraform tạo): ảnh lưu trên S3, quyền ghi lấy từ role IRSA của ServiceAccount catalog-service.
+# Không có (docker compose / local): ảnh lưu ở MEDIA_ROOT như cũ.
+MEDIA_BUCKET = env("MEDIA_BUCKET", "")
+if MEDIA_BUCKET:
+    STORAGES = {
+        "default": {"BACKEND": "catalog.storage.MediaStorage",
+                    "OPTIONS": {"bucket_name": MEDIA_BUCKET, "region_name": env("AWS_REGION", "ap-southeast-1")}},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
+
+CACHES = cache_settings("catalog")
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
 # Django admin của catalog-service được gateway publish tại /admin/catalog/.
 SESSION_COOKIE_NAME = "gm_catalog_admin_sessionid"
 CSRF_COOKIE_NAME = "gm_catalog_admin_csrftoken"
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:8088,http://127.0.0.1:8088")
+CSRF_TRUSTED_ORIGINS += env_list("EXTRA_CSRF_TRUSTED_ORIGINS", "")  # vd. https://<id>.cloudfront.net (ConfigMap greenmart-infra)
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
@@ -76,7 +90,7 @@ REST_FRAMEWORK = {
 
 JAZZMIN_SETTINGS = {"site_title": "GreenMart – Catalog", "site_header": "GreenMart Catalog", "welcome_sign": "GreenMart – quản trị danh mục & sản phẩm"}
 
-# Quan sát: Prometheus /metrics + AWS X-Ray (bật bằng ENABLE_PROMETHEUS / ENABLE_XRAY, mặc định tắt).
+# Quan sát: Prometheus /metrics, xem bằng Grafana (bật bằng ENABLE_PROMETHEUS, mặc định tắt).
 from greenmart_common.observability import apply as _apply_observability  # noqa: E402
 
 _apply_observability(globals(), "catalog-service")

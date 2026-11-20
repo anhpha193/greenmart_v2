@@ -30,11 +30,18 @@ output "next_steps" {
 }
 
 output "grafana_role_arn" {
-  description = "Role IRSA cho Grafana (đọc CloudWatch + X-Ray)."
-  value       = try(aws_iam_role.irsa["grafana"].arn, null)
+  description = "Role IRSA cho Grafana (chỉ đọc metric CloudWatch)."
+  value       = try(aws_iam_role.grafana[0].arn, null)
 }
 
-output "xray_daemon_role_arn" {
-  description = "Role IRSA cho X-Ray daemon."
-  value       = try(aws_iam_role.irsa["xray-daemon"].arn, null)
+output "redis_url" {
+  value = local.redis_url
+}
+
+output "media_bucket" {
+  value = aws_s3_bucket.media.bucket
+}
+
+output "order_events_queue_url" {
+  value = aws_sqs_queue.order_events.url
 }

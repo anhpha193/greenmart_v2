@@ -1,4 +1,4 @@
-# Bước 1 chuyển dữ liệu: tạo PVC + pod tạm để `kubectl cp` file db.sqlite3 cũ vào. Xem k8s/README.md.
+# Bước 1 chuyển dữ liệu: tạo PVC + pod tạm để `kubectl cp` file db.sqlite3 cũ vào. Xem README.md ở thư mục gốc.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

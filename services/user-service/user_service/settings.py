@@ -68,6 +68,7 @@ STATIC_ROOT = env("STATIC_ROOT", "/staticfiles")
 SESSION_COOKIE_NAME = "gm_user_admin_sessionid"
 CSRF_COOKIE_NAME = "gm_user_admin_csrftoken"
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:8088,http://127.0.0.1:8088")
+CSRF_TRUSTED_ORIGINS += env_list("EXTRA_CSRF_TRUSTED_ORIGINS", "")  # vd. https://<id>.cloudfront.net (ConfigMap greenmart-infra)
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
@@ -93,7 +94,7 @@ REST_FRAMEWORK = {
 
 JAZZMIN_SETTINGS = {"site_title": "GreenMart – Users", "site_header": "GreenMart Users", "welcome_sign": "GreenMart – quản trị tài khoản"}
 
-# Quan sát: Prometheus /metrics + AWS X-Ray (bật bằng ENABLE_PROMETHEUS / ENABLE_XRAY, mặc định tắt).
+# Quan sát: Prometheus /metrics, xem bằng Grafana (bật bằng ENABLE_PROMETHEUS, mặc định tắt).
 from greenmart_common.observability import apply as _apply_observability  # noqa: E402
 
 _apply_observability(globals(), "user-service")

@@ -1,11 +1,9 @@
-# Phần bổ sung cho stack giám sát: X-Ray daemon, PodMonitor (Prometheus scrape GreenMart) và dashboard so sánh.
-# Application monitoring-extras (gitops/apps/monitoring-extras.yaml.tpl) thêm patch: role IRSA và region cho X-Ray daemon.
+# Phần bổ sung cho stack giám sát: PodMonitor (Prometheus scrape GreenMart) và dashboard Grafana.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: monitoring
 
 resources:
-  - xray-daemon.yaml
   - podmonitor-greenmart.yaml
 
 generatorOptions:
@@ -14,6 +12,6 @@ generatorOptions:
     grafana_dashboard: "1"   # sidecar của Grafana tự nạp ConfigMap có nhãn này
 
 configMapGenerator:
-  - name: dashboard-greenmart-compare
+  - name: dashboard-greenmart-overview
     files:
-      - dashboards/greenmart-compare.json
+      - dashboards/greenmart-overview.json

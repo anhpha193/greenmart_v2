@@ -1,8 +1,9 @@
 # ### Dọn sạch: xóa toàn bộ tài nguyên GreenMart trên AWS để ngừng tính phí ###
-# CHỈ chạy tay (Run workflow). Thao tác KHÔNG THỂ HOÀN TÁC: mất RDS (không snapshot), ảnh upload (EBS), cluster, ALB.
+# CHỈ chạy tay (Run workflow). Thao tác KHÔNG THỂ HOÀN TÁC: mất RDS (không snapshot), ảnh upload (S3), Valkey, SQS, CloudFront, cluster, ALB.
 # Phải gõ đúng tên cluster vào ô "confirm" mới chạy.
 # Thứ tự (quan trọng, làm sai sẽ để sót ALB/ENI/volume và bị tính phí hoặc kẹt xóa VPC):
-#   1 Dừng Argo CD, xóa Ingress -> controller xóa ALB   2 terraform destroy (RDS, secret, IRSA, addon, X-Ray)
+#   1 Dừng Argo CD, xóa Ingress -> controller xóa ALB   1b terraform destroy edge (CloudFront)
+#   2 terraform destroy (RDS, Valkey, S3 ảnh, SQS, VPC endpoint S3, secret, IRSA)
 #   3 xóa PVC/PV và ghi lại EBS volume (reclaimPolicy=Retain nên volume không tự mất)   4 xóa namespace
 #   5 eksctl delete cluster   6 xóa EBS volume còn sót, IAM policy của ALB Controller, (tùy chọn) ECR   7 báo cáo tài nguyên còn sót
 # Không xóa: S3 bucket chứa Terraform state (TF_STATE_BUCKET) và các GitHub secret/variable.
@@ -89,11 +90,34 @@ jobs:
             echo "Còn $N ALB ($i/40)"; sleep 15
           done
 
-      # 2. Terraform: RDS, secret, IRSA, addon CloudWatch, luật X-Ray. Cần cluster còn sống (provider kubernetes).
+      # 2. Terraform: RDS, Valkey, S3 ảnh, SQS, secret, IRSA. Cần cluster còn sống (provider kubernetes).
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~1.10"
           terraform_wrapper: false
+
+      # 1b. Stack edge (CloudFront) trước; state riêng. Chưa từng tạo thì state trống, destroy không làm gì.
+      - name: terraform destroy edge (CloudFront)
+        working-directory: infra/terraform-edge
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          : "${TF_STATE_BUCKET:?Cần đặt repository variable TF_STATE_BUCKET}"
+          TF_STATE_BUCKET="$(echo "$TF_STATE_BUCKET" | tr -d '[:space:]')"
+          cat > backend.tf <<EOT
+          terraform {
+            backend "s3" {
+              bucket       = "${TF_STATE_BUCKET}"
+              key          = "greenmart/${CLUSTER_NAME}/edge.tfstate"
+              region       = "${AWS_REGION}"
+              encrypt      = true
+              use_lockfile = true
+            }
+          }
+          EOT
+          terraform init -input=false
+          terraform state list | grep '^kubernetes_' | xargs -r -n1 terraform state rm || true
+          terraform destroy -input=false -auto-approve -var "region=${AWS_REGION}" -var "cluster_name=${CLUSTER_NAME}" -var "alb_dns_name=deleted.invalid"
 
       - name: terraform destroy
         working-directory: infra/terraform

@@ -3,10 +3,12 @@
 #   1 eks-step1-create-cluster.yml   2 eks-step2-bootstrap.yml        3 eks-step3-terraform.yml
 #   4 eks-step4-push-images.yml      5 eks-step5-deploy.yml (kubectl) hoặc eks-step5-argocd.yml 6 eks-step6-media-admin.yml
 #   7 eks-step7-migrate-legacy.yml   (chỉ chạy khi bật migrate_legacy)
-#   8 eks-step8-monitoring.yml       (Prometheus + Grafana + X-Ray, chạy khi bật monitoring)
+#   8 eks-step8-monitoring.yml       (Prometheus + Grafana, chạy khi bật monitoring)
+#  10 eks-step10-edge.yml            (CloudFront trước ALB, chạy khi bật edge)
 #
 # Cần trước:
 #   secrets.AWS_ROLE_TO_ASSUME        IAM role tin cậy GitHub OIDC, đủ quyền EKS/EC2/IAM/RDS/ECR/CloudFormation/ELB/S3
+#                                     + ElastiCache/SQS/CloudFront (Valkey, hàng đợi đơn hàng, tầng edge)
 #   vars.TF_STATE_BUCKET              S3 bucket (đã tạo sẵn) lưu Terraform state – runner mất sau mỗi lần chạy nên KHÔNG dùng state local
 #   secrets.DJANGO_SUPERUSER_PASSWORD mật khẩu admin Django (giai đoạn 6)
 #   (repo private) secrets.ARGOCD_REPO_TOKEN  token đọc repo cho Argo CD (giai đoạn 5)
@@ -25,7 +27,8 @@ on:
       db_backup_retention_days: { description: "3. Số ngày giữ backup RDS (gói Free: 1)", default: "1", type: string }
       migrate_legacy:  { description: "7. Chạy thêm bước migrate dữ liệu SQLite cũ", default: false, type: boolean }
       migrate_dry_run: { description: "7. Chỉ chạy thử (--dry-run), chưa ghi dữ liệu", default: true, type: boolean }
-      monitoring:      { description: "8. Cài monitoring: Prometheus, Grafana, X-Ray daemon, dashboard so sánh", default: true, type: boolean }
+      monitoring:      { description: "8. Cài monitoring: Prometheus + Grafana, dashboard GreenMart – Tổng quan", default: true, type: boolean }
+      edge:            { description: "10. Tạo CloudFront trước ALB", default: true, type: boolean }
       deploy_method:   { description: "5. Cách deploy: kubectl (apply -k overlay) hoặc argocd (GitOps)", default: kubectl, type: choice, options: [kubectl, argocd] }
 
 permissions:
@@ -117,6 +120,15 @@ jobs:
     needs: media-and-admin
     if: ${{ inputs.monitoring }}
     uses: ./.github/workflows/eks-step8-monitoring.yml
+    secrets: inherit
+    with:
+      cluster_name: ${{ inputs.cluster_name }}
+      aws_region: ${{ inputs.aws_region }}
+
+  edge:
+    needs: media-and-admin
+    if: ${{ inputs.edge }}
+    uses: ./.github/workflows/eks-step10-edge.yml
     secrets: inherit
     with:
       cluster_name: ${{ inputs.cluster_name }}

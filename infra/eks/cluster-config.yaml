@@ -8,6 +8,6 @@ iam:
 nodeGroups:
   - name: my-nodes
     instanceType: c7i-flex.large
-    desiredCapacity: 2
-    minSize: 2
+    desiredCapacity: 4
+    minSize: 4
     maxSize: 4

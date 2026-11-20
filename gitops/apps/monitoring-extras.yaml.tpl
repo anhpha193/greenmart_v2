@@ -1,5 +1,4 @@
-# X-Ray daemon + PodMonitor GreenMart + dashboard so sánh (đọc từ Git: gitops/monitoring/extras).
-# Patch inline gắn role IRSA và AWS_REGION cho X-Ray daemon. File mẫu: workflow thay ${...} bằng envsubst.
+# PodMonitor GreenMart + dashboard Grafana (đọc từ Git: gitops/monitoring/extras). File mẫu: workflow thay ${...} bằng envsubst.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -18,27 +17,6 @@ spec:
     repoURL: ${REPO_URL}
     targetRevision: ${REPO_REVISION}
     path: gitops/monitoring/extras
-    kustomize:
-      patches:
-        - target:
-            kind: ServiceAccount
-            name: xray-daemon
-          patch: |-
-            apiVersion: v1
-            kind: ServiceAccount
-            metadata:
-              name: xray-daemon
-              annotations:
-                eks.amazonaws.com/role-arn: ${XRAY_ROLE_ARN}
-        - target:
-            kind: Deployment
-            name: xray-daemon
-          patch: |-
-            - op: add
-              path: /spec/template/spec/containers/0/env
-              value:
-                - name: AWS_REGION
-                  value: ${AWS_REGION}
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring

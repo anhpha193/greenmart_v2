@@ -1,0 +1,101 @@
+# ### CloudFront trước ALB (infra/terraform-edge) ###
+# Workflow con: gọi từ deploy-eks.yml (workflow_call), hoặc chạy riêng bằng Run workflow.
+# Chạy sau khi deploy (giai đoạn 5) vì cần DNS của ALB do Ingress greenmart-alb tạo. State riêng: greenmart/<cluster>/edge.tfstate.
+# Tạo CloudFront lần đầu mất khoảng 5-15 phút. Xong thì ghi địa chỉ CloudFront vào ConfigMap greenmart-infra
+# (EXTRA_CSRF_TRUSTED_ORIGINS) và khởi động lại web, user-service, catalog-service để Django nhận form gửi qua CloudFront.
+name: "EKS 10 - CloudFront"
+
+on:
+  workflow_call:
+    inputs:
+      cluster_name:   { description: "Tên cluster EKS", required: false, default: "greenmart", type: string }
+      aws_region:     { description: "AWS region", required: false, default: "ap-southeast-1", type: string }
+  workflow_dispatch:
+    inputs:
+      cluster_name:   { description: "Tên cluster EKS", required: false, default: "greenmart", type: string }
+      aws_region:     { description: "AWS region", required: false, default: "ap-southeast-1", type: string }
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  CLUSTER_NAME: ${{ inputs.cluster_name }}
+  AWS_REGION: ${{ inputs.aws_region }}
+  NS: greenmart
+
+jobs:
+  edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: infra/terraform-edge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/eks-setup
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          region: ${{ inputs.aws_region }}
+          cluster-name: ${{ inputs.cluster_name }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.10"
+          terraform_wrapper: false
+
+      - name: Lấy DNS của ALB
+        run: |
+          ADDR=$(kubectl -n "$NS" get ingress greenmart-alb -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+          [ -n "$ADDR" ] || { echo "Ingress greenmart-alb chưa có địa chỉ: chạy giai đoạn 5 trước"; exit 1; }
+          echo "ALB_DNS=$ADDR" >> "$GITHUB_ENV"
+
+      - name: Cấu hình backend S3 cho state
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          : "${TF_STATE_BUCKET:?Cần đặt repository variable TF_STATE_BUCKET}"
+          TF_STATE_BUCKET="$(echo "$TF_STATE_BUCKET" | tr -d '[:space:]')"
+          cat > backend.tf <<EOT
+          terraform {
+            backend "s3" {
+              bucket       = "${TF_STATE_BUCKET}"
+              key          = "greenmart/${CLUSTER_NAME}/edge.tfstate"
+              region       = "${AWS_REGION}"
+              encrypt      = true
+              use_lockfile = true
+            }
+          }
+          EOT
+          cat > terraform.tfvars <<EOT
+          region         = "${AWS_REGION}"
+          cluster_name   = "${CLUSTER_NAME}"
+          alb_dns_name   = "${ALB_DNS}"
+          EOT
+
+      - name: terraform init
+        run: terraform init -input=false
+
+      - name: terraform plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: terraform apply
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Khởi động lại service để nhận địa chỉ CloudFront (CSRF)
+        run: |
+          kubectl -n "$NS" rollout restart deploy/web deploy/user-service deploy/catalog-service
+          kubectl -n "$NS" rollout status deploy/web deploy/user-service deploy/catalog-service --timeout=300s
+
+      - name: Kiểm tra qua CloudFront
+        run: |
+          CF=$(terraform output -raw cloudfront_domain)
+          curl -fsS --retry 20 --retry-delay 30 --retry-all-errors "https://${CF}/gateway-health"
+          {
+            echo "### CloudFront"
+            echo "- Địa chỉ: https://${CF}"
+            echo "- Origin: http://${ALB_DNS}"
+          } >> "$GITHUB_STEP_SUMMARY"

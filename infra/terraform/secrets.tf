@@ -167,7 +167,7 @@ resource "kubernetes_job_v1" "rds_init" {
   }
 
   depends_on = [
-  aws_vpc_security_group_ingress_rule.rds_from_cluster,
-  aws_vpc_security_group_ingress_rule.rds_from_vpc,
+    aws_vpc_security_group_ingress_rule.rds_from_cluster,
+    aws_vpc_security_group_ingress_rule.rds_from_vpc,
   ]
 }

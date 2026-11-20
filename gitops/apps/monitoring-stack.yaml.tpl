@@ -1,5 +1,6 @@
 # Prometheus + Grafana (chart kube-prometheus-stack) do Argo CD cài. File mẫu: workflow (eks-step8-monitoring.yml) thay ${...} bằng envsubst.
-# Grafana có sẵn 3 datasource: Prometheus, CloudWatch, X-Ray (đọc bằng role IRSA ${GRAFANA_ROLE_ARN}).
+# Giám sát chỉ bằng Grafana. Datasource: Prometheus (pod, node, request Django) và CloudWatch chỉ để đọc metric
+# mặc định của ALB/RDS/ElastiCache/SQS/CloudFront (role IRSA ${GRAFANA_ROLE_ARN}, chỉ quyền đọc). Không dùng X-Ray.
 # Mật khẩu admin Grafana nằm trong Secret grafana-admin (workflow tạo, ngẫu nhiên).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -51,8 +52,6 @@ spec:
             name: grafana
             annotations:
               eks.amazonaws.com/role-arn: ${GRAFANA_ROLE_ARN}
-          plugins:
-            - grafana-x-ray-datasource
           resources:
             requests: { cpu: 50m, memory: 192Mi }
             limits: { memory: 512Mi }
@@ -60,13 +59,6 @@ spec:
             - name: CloudWatch
               type: cloudwatch
               uid: cloudwatch
-              access: proxy
-              jsonData:
-                authType: default
-                defaultRegion: ${AWS_REGION}
-            - name: X-Ray
-              type: grafana-x-ray-datasource
-              uid: xray
               access: proxy
               jsonData:
                 authType: default

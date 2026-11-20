@@ -3,6 +3,7 @@ Database web_db chỉ dùng cho session."""
 import os
 from pathlib import Path
 
+from greenmart_common.cache import cache_settings, redis_url
 from greenmart_common.env import env, env_bool, env_list, mysql_database
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -52,7 +53,11 @@ TEMPLATES = [{
 
 DATABASES = {"default": mysql_database("DB")}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-SESSION_ENGINE = "django.contrib.sessions.backends.db"
+
+# Có Valkey (REDIS_URL): session đọc từ cache, chỉ ghi xuống web_db khi session đổi (cached_db),
+# nên mỗi request không còn một câu SELECT vào bảng session. Valkey mất dữ liệu thì session vẫn còn trong DB.
+CACHES = cache_settings("web")
+SESSION_ENGINE = "django.contrib.sessions.backends.cached_db" if redis_url() else "django.contrib.sessions.backends.db"
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -64,6 +69,8 @@ STATIC_ROOT = env("STATIC_ROOT", "/staticfiles")
 
 LOGIN_URL = "/loginn/"
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:8088,http://127.0.0.1:8088")
+# Địa chỉ thêm do Terraform ghi vào ConfigMap greenmart-infra (vd. https://<id>.cloudfront.net khi đi qua CloudFront).
+CSRF_TRUSTED_ORIGINS += env_list("EXTRA_CSRF_TRUSTED_ORIGINS", "")
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
@@ -74,3 +81,8 @@ LOGGING = {
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", "INFO")},
 }
+
+# Quan sát: Prometheus /metrics, xem bằng Grafana (bật bằng ENABLE_PROMETHEUS, mặc định tắt).
+from greenmart_common.observability import apply as _apply_observability  # noqa: E402
+
+_apply_observability(globals(), "web")

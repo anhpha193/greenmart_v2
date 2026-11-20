@@ -27,5 +27,17 @@ if [ -n "${DJANGO_SUPERUSER_USERNAME:-}" ] && [ -n "${DJANGO_SUPERUSER_PASSWORD:
   python manage.py createsuperuser --noinput 2>/dev/null || echo "[entrypoint] superuser đã tồn tại (bỏ qua)"
 fi
 
+# Truyền lệnh riêng (vd. order-worker: python manage.py consume_order_events) thì chạy lệnh đó thay cho gunicorn.
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
+
+# gthread: mỗi worker có nhiều thread, request đang chờ service khác/MySQL không chặn cả tiến trình
+# (sync worker cũ: 2 worker = chỉ 2 request cùng lúc mỗi pod). Timeout 60s thay cho mặc định 30s.
+#   WEB_CONCURRENCY   số worker (tiến trình), mặc định 2
+#   GUNICORN_THREADS  số thread mỗi worker, mặc định 4  => mỗi pod xử lý 8 request cùng lúc
+#   GUNICORN_TIMEOUT  giây, mặc định 60
 exec gunicorn "${WSGI_MODULE}.wsgi:application" --bind 0.0.0.0:8000 \
-  --workers "${WEB_CONCURRENCY:-2}" --access-logfile - --error-logfile -
+  --workers "${WEB_CONCURRENCY:-2}" --worker-class gthread --threads "${GUNICORN_THREADS:-4}" \
+  --timeout "${GUNICORN_TIMEOUT:-60}" --keep-alive 5 \
+  --access-logfile - --error-logfile -

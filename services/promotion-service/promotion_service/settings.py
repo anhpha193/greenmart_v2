@@ -1,6 +1,7 @@
 """promotion-service: khuyến mãi. Database riêng: promotion_db (MySQL). Không expose ra ngoài gateway."""
 from pathlib import Path
 
+from greenmart_common.cache import cache_settings
 from greenmart_common.env import env, env_bool, env_list, mysql_database
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,6 +27,7 @@ WSGI_APPLICATION = "promotion_service.wsgi.application"
 
 DATABASES = {"default": mysql_database("DB")}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+CACHES = cache_settings("promotion")
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -39,7 +41,7 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
 }
 
-# Quan sát: Prometheus /metrics + AWS X-Ray (bật bằng ENABLE_PROMETHEUS / ENABLE_XRAY, mặc định tắt).
+# Quan sát: Prometheus /metrics, xem bằng Grafana (bật bằng ENABLE_PROMETHEUS, mặc định tắt).
 from greenmart_common.observability import apply as _apply_observability  # noqa: E402
 
 _apply_observability(globals(), "promotion-service")

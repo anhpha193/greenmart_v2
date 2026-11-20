@@ -1,4 +1,4 @@
-# ### cho ảnh sản phẩm cũ vào volume EBS và tạo tk admin cho csdl ###
+# ### đưa ảnh sản phẩm mẫu lên S3 và tạo tk admin cho csdl ###
 # Workflow con: gọi từ deploy-eks.yml (workflow_call), hoặc chạy riêng bằng Run workflow để làm lại đúng giai đoạn này.
 # Cần secrets/variables như mô tả ở đầu deploy-eks.yml.
 name: "EKS 6 - Ảnh sản phẩm và tài khoản admin"
@@ -24,7 +24,7 @@ env:
 
 jobs:
   # ===========================================================================
-  # ### cho ảnh sản phẩm cũ vào volume EBS và tạo tk admin cho csdl ###
+  # ### đưa ảnh sản phẩm mẫu lên S3 và tạo tk admin cho csdl ###
   # ===========================================================================
   media-and-admin:
     runs-on: ubuntu-latest
@@ -42,20 +42,14 @@ jobs:
           region: ${{ inputs.aws_region }}
           cluster-name: ${{ inputs.cluster_name }}
 
-      # POD=$(kubectl -n greenmart get pod -l app.kubernetes.io/name=catalog-service -o name | head -1)
-      - name: Lấy pod catalog-service
+      # Ảnh nằm ở S3 (Terraform: infra/terraform/s3-media.tf), key media/products/<tên file>, khớp catalog/storage.py.
+      # Gateway đọc /media/ từ bucket qua VPC endpoint; catalog-service ghi ảnh mới bằng role IRSA.
+      - name: Đưa ảnh sản phẩm lên S3
         run: |
-          POD=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=catalog-service --field-selector=status.phase=Running -o name | head -1)
-          [ -n "$POD" ] || { echo "Không có pod catalog-service đang chạy"; exit 1; }
-          echo "POD=${POD#pod/}" >> "$GITHUB_ENV"
-
-      # copy media/products vào /media/products (dùng tar: không tạo thư mục lồng products/products, giữ tên file UTF-8)
-      # (Trên runner Linux không gặp lỗi đường dẫn của Git Bash nên không cần MSYS_NO_PATHCONV=1)
-      - name: Copy ảnh sản phẩm vào volume EBS
-        run: |
-          kubectl -n "$NS" exec "$POD" -- mkdir -p /media/products
-          tar -C media/products -cf - . | kubectl -n "$NS" exec -i "$POD" -- tar -xf - -C /media/products
-          kubectl -n "$NS" exec "$POD" -- ls -la /media/products
+          BUCKET=$(kubectl -n "$NS" get configmap greenmart-infra -o jsonpath='{.data.MEDIA_BUCKET}')
+          [ -n "$BUCKET" ] || { echo "ConfigMap greenmart-infra chưa có MEDIA_BUCKET: chạy Terraform (giai đoạn 3) trước"; exit 1; }
+          aws s3 sync media/products "s3://${BUCKET}/media/products/" --region "$AWS_REGION" --only-show-errors
+          echo "Số ảnh trên S3: $(aws s3 ls "s3://${BUCKET}/media/products/" --region "$AWS_REGION" | wc -l)"
 
       # kubectl exec ... createsuperuser (không tương tác: thông tin lấy từ secret/variable của repo)
       - name: Tạo superuser cho user-service
