@@ -24,6 +24,8 @@ code=$(curl -s -o /dev/null -m 15 -w "%{http_code}" "$BASE_URL/gateway-health" |
 OUT="$HERE/results/$(date +%Y%m%d-%H%M%S)-$PROFILE"; mkdir -p "$OUT"
 echo "k6 profile '$PROFILE' -> $BASE_URL | kết quả: $OUT"
 cd "$HERE"
-"$K6" run --summary-mode=full --summary-export="$OUT/summary.json" \
+"$K6" run --summary-mode=full --summary-export="$OUT/summary.json" --out csv="$OUT/metrics.csv.gz" \
   -e BASE_URL="$BASE_URL" -e PROFILE="$PROFILE" "$@" greenmart.js 2>&1 | tee "$OUT/summary.txt"
+PY="$(command -v python3 || command -v python || true)"
+[ -n "$PY" ] && PYTHONIOENCODING=utf-8 "$PY" "$HERE/timeline.py" "$OUT/metrics.csv.gz" | tee "$OUT/timeline.txt"
 echo "Kết quả: $OUT/summary.txt"

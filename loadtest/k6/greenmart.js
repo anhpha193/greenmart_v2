@@ -118,8 +118,10 @@ function get(name, path, params = {}) {
   return http.get(`${BASE}${path}`, { tags: { name }, ...params });
 }
 
+// Referer = trang chủ (cùng origin): Django cần Referer khi chạy HTTPS, và web chuyển hướng về Referer sau khi
+// thêm giỏ. KHÔNG dùng chính URL POST làm Referer: web sẽ chuyển hướng về /add-to-cart/... và k6 lặp vòng.
 function post(name, path, form) {
-  return http.post(`${BASE}${path}`, form, { tags: { name }, headers: { Referer: `${BASE}${path}` } });
+  return http.post(`${BASE}${path}`, form, { tags: { name }, headers: { Referer: `${BASE}/` } });
 }
 
 // ---------- Khách duyệt web ----------
