@@ -24,8 +24,13 @@ code=$(curl -s -o /dev/null -m 15 -w "%{http_code}" "$BASE_URL/gateway-health" |
 OUT="$HERE/results/$(date +%Y%m%d-%H%M%S)-$PROFILE"; mkdir -p "$OUT"
 echo "k6 profile '$PROFILE' -> $BASE_URL | kết quả: $OUT"
 cd "$HERE"
+# k6 trả mã lỗi khi vượt ngưỡng (threshold): vẫn in bảng theo thời gian rồi mới trả lại mã đó.
+set +e
 "$K6" run --summary-mode=full --summary-export="$OUT/summary.json" --out csv="$OUT/metrics.csv.gz" \
   -e BASE_URL="$BASE_URL" -e PROFILE="$PROFILE" "$@" greenmart.js 2>&1 | tee "$OUT/summary.txt"
+status=${PIPESTATUS[0]}
+set -e
 PY="$(command -v python3 || command -v python || true)"
 [ -n "$PY" ] && PYTHONIOENCODING=utf-8 "$PY" "$HERE/timeline.py" "$OUT/metrics.csv.gz" | tee "$OUT/timeline.txt"
-echo "Kết quả: $OUT/summary.txt"
+echo "Kết quả: $OUT/summary.txt (k6 exit $status)"
+exit "$status"
