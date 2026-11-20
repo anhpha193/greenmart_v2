@@ -77,6 +77,14 @@ spec:
         app.kubernetes.io/name: gateway
         app.kubernetes.io/part-of: greenmart
     spec:
+      # Rải pod đều các node: không để một node 100% CPU trong khi node khác còn trống
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: gateway
       automountServiceAccountToken: false
       initContainers:
       - name: static-web

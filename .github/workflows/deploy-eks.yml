@@ -28,7 +28,7 @@ on:
       migrate_legacy:  { description: "7. Chạy thêm bước migrate dữ liệu SQLite cũ", default: false, type: boolean }
       migrate_dry_run: { description: "7. Chỉ chạy thử (--dry-run), chưa ghi dữ liệu", default: true, type: boolean }
       monitoring:      { description: "8. Cài monitoring: Prometheus + Grafana, dashboard GreenMart – Tổng quan", default: true, type: boolean }
-      edge:            { description: "10. Tạo CloudFront trước ALB", default: true, type: boolean }
+      edge:            { description: "10. Tạo CloudFront trước ALB (tài khoản phải được AWS xác minh cho CloudFront trước)", default: false, type: boolean }
       deploy_method:   { description: "5. Cách deploy: kubectl (apply -k overlay) hoặc argocd (GitOps)", default: kubectl, type: choice, options: [kubectl, argocd] }
 
 permissions:
@@ -107,7 +107,8 @@ jobs:
 
   migrate-legacy:
     needs: media-and-admin
-    if: ${{ inputs.migrate_legacy }}
+    # Một job deploy luôn bị skip nên phải kiểm tra kết quả của media-and-admin, nếu không job này cũng bị skip theo
+    if: ${{ !cancelled() && needs.media-and-admin.result == 'success' && inputs.migrate_legacy }}
     uses: ./.github/workflows/eks-step7-migrate-legacy.yml
     secrets: inherit
     with:
@@ -118,7 +119,8 @@ jobs:
 
   monitoring:
     needs: media-and-admin
-    if: ${{ inputs.monitoring }}
+    # Một job deploy luôn bị skip nên phải kiểm tra kết quả của media-and-admin, nếu không job này cũng bị skip theo
+    if: ${{ !cancelled() && needs.media-and-admin.result == 'success' && inputs.monitoring }}
     uses: ./.github/workflows/eks-step8-monitoring.yml
     secrets: inherit
     with:
@@ -127,7 +129,8 @@ jobs:
 
   edge:
     needs: media-and-admin
-    if: ${{ inputs.edge }}
+    # Một job deploy luôn bị skip nên phải kiểm tra kết quả của media-and-admin, nếu không job này cũng bị skip theo
+    if: ${{ !cancelled() && needs.media-and-admin.result == 'success' && inputs.edge }}
     uses: ./.github/workflows/eks-step10-edge.yml
     secrets: inherit
     with:

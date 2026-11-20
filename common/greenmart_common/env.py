@@ -31,7 +31,11 @@ def mysql_database(prefix="DB"):
         "PASSWORD": env(f"{prefix}_PASSWORD", required=True),
         "HOST": env(f"{prefix}_HOST", "mysql"),
         "PORT": env(f"{prefix}_PORT", "3306"),
-        "CONN_MAX_AGE": 60,
+        # Giữ kết nối MySQL giữa các request (giây). gunicorn gthread: MỖI THREAD giữ một kết nối, nên
+        # số kết nối = pod x worker x thread. RDS db.t4g.micro chỉ cho 60 kết nối -> overlay EKS đặt 0
+        # (mở/đóng theo request; catalog/web phần lớn đọc từ Valkey nên ít khi chạm MySQL).
+        "CONN_MAX_AGE": int(env("DB_CONN_MAX_AGE", "60")),
+        "CONN_HEALTH_CHECKS": True,
         "OPTIONS": {
             "charset": "utf8mb4",
             "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",

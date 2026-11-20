@@ -33,6 +33,12 @@ variable "db_instance_class" {
   default = "db.t4g.small"
 }
 
+variable "db_max_connections" {
+  description = "max_connections của MySQL. db.t4g.micro mặc định 60; 150 vẫn vừa RAM 1 GiB khi phần lớn kết nối là ngắn."
+  type        = number
+  default     = 150
+}
+
 variable "db_allocated_storage" {
   description = "Dung lượng ban đầu (GiB)."
   type        = number

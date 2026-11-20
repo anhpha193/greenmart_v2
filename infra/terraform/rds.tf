@@ -84,6 +84,14 @@ resource "aws_db_parameter_group" "mysql" {
     value = "utf8mb4_unicode_ci"
   }
 
+  # Mặc định db.t4g.micro chỉ 60 kết nối (theo RAM). Nâng lên để chịu được khi HPA scale nhiều pod.
+  # Tham số động: áp dụng ngay, không reboot.
+  parameter {
+    name         = "max_connections"
+    value        = tostring(var.db_max_connections)
+    apply_method = "immediate"
+  }
+
   lifecycle {
     create_before_destroy = true
   }

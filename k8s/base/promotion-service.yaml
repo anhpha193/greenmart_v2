@@ -23,6 +23,14 @@ spec:
         app.kubernetes.io/part-of: greenmart
         greenmart/db-client: 'true'
     spec:
+      # Rải pod đều các node: không để một node 100% CPU trong khi node khác còn trống
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: promotion-service
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       containers:

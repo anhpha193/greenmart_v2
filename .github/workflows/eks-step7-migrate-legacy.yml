@@ -105,18 +105,31 @@ jobs:
       - name: Apply job data-migrator
         run: |
           F=k8s/jobs/data-migrator.yaml
-          sed -i "s#image: greenmart/data-migrator#image: ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/greenmart/data-migrator:${TAG}#" "$F"
+          # Đổi mọi dạng image data-migrator (kể cả đã ghi cứng tag cũ) thành image ECR đúng tag của lần deploy
+          sed -i -E "s#image: [^ ]*data-migrator[^ ]*#image: ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/greenmart/data-migrator:${TAG}#" "$F"
           sed -i '/name: MYSQL_USER/{n;s/value: root/value: admin/}' "$F"
-          if [ "${{ inputs.migrate_dry_run }}" != "true" ]; then sed -i '/^        - --dry-run$/d' "$F"; fi
-          grep -nE "image:|value: admin|dry-run" "$F" || true
+          # dry-run: bật dòng --dry-run (chỉ thống kê, không ghi). Không dry-run: xóa dòng đó.
+          if [ "${{ inputs.migrate_dry_run }}" = "true" ]; then
+            sed -i -E 's/^( *)# - --dry-run.*$/\1- --dry-run/' "$F"
+          else
+            sed -i -E '/^ *(# )?- --dry-run/d' "$F"
+          fi
+          grep -nE "image:|value: admin|dry-run|truncate" "$F" || true
+          if [ "${{ inputs.migrate_dry_run }}" = "true" ] && ! grep -qE '^ *- --dry-run$' "$F"; then
+            echo "Chọn dry-run nhưng không bật được --dry-run trong $F: dừng để không ghi dữ liệu thật"; exit 1
+          fi
           kubectl -n "$NS" delete job data-migrator --ignore-not-found
           kubectl -n "$NS" apply -f "$F"
 
       # kiểm tra log (kubectl logs job/data-migrator)
+      # Chờ tới khi Job xong HOẶC lỗi (trước đây chỉ chờ "complete" nên Job lỗi vẫn treo đủ 10 phút)
       - name: Kiểm tra log data-migrator
         run: |
-          kubectl -n "$NS" wait --for=condition=complete job/data-migrator --timeout=600s || {
-            kubectl -n "$NS" logs job/data-migrator || true
-            exit 1
-          }
-          kubectl -n "$NS" logs job/data-migrator
+          for i in $(seq 1 120); do
+            OK=$(kubectl -n "$NS" get job data-migrator -o jsonpath='{.status.succeeded}')
+            FAIL=$(kubectl -n "$NS" get job data-migrator -o jsonpath='{.status.failed}')
+            [ "${OK:-0}" -ge 1 ] && { kubectl -n "$NS" logs job/data-migrator; exit 0; }
+            [ "${FAIL:-0}" -ge 1 ] && { echo "Job data-migrator lỗi:"; kubectl -n "$NS" logs job/data-migrator || true; exit 1; }
+            sleep 5
+          done
+          echo "Quá 10 phút chưa xong"; kubectl -n "$NS" logs job/data-migrator || true; exit 1

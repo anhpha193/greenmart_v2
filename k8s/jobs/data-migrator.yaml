@@ -17,20 +17,18 @@ spec:
       restartPolicy: Never
       containers:
       - name: migrator
-        image: 410098332444.dkr.ecr.ap-southeast-1.amazonaws.com/greenmart/data-migrator:1.0.0
+        image: greenmart/data-migrator   # workflow EKS 7 đổi thành image ECR theo image_tag
+        # Dạng --tham-số=giá-trị: mật khẩu master do RDS tự sinh có thể bắt đầu bằng "-", viết tách hai dòng
+        # thì argparse hiểu nhầm là một option khác ("--password: expected one argument").
         command:
         - python
         - /scripts/migrate_sqlite_to_mysql.py
-        - --sqlite
-        - /legacy/db.sqlite3
-        - --host
-        - $(DB_HOST)
-        - --user
-        - $(MYSQL_USER)
-        - --password
-        - $(MYSQL_PASSWORD)
-        # - --dry-run
+        - --sqlite=/legacy/db.sqlite3
+        - --host=$(DB_HOST)
+        - --user=$(MYSQL_USER)
+        - --password=$(MYSQL_PASSWORD)
         - --truncate
+        # - --dry-run          (workflow EKS 7 bỏ dấu # khi migrate_dry_run = true)
         envFrom:
         - configMapRef:
             name: greenmart-config
