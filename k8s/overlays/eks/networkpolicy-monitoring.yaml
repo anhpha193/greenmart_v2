@@ -13,7 +13,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [web, user-service, catalog-service, order-service, promotion-service]
+        values: [web, web-auth, user-service, catalog-service, order-service, promotion-service]
   policyTypes: [Ingress]
   ingress:
     - from:

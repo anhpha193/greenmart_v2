@@ -3,7 +3,8 @@
 //
 // Hai nhóm người dùng (80% khách, 20% đăng nhập):
 //   guest: trang chủ -> danh sách -> chi tiết -> tìm kiếm -> thêm vào giỏ -> giỏ hàng (mỗi lượt là khách mới)
-//   user : đăng nhập -> danh sách -> thêm vào giỏ -> giỏ hàng -> thanh toán -> hồ sơ -> (đặt hàng) -> đăng xuất
+//   user : đăng nhập 1 lần, rồi mỗi lượt: danh sách -> thêm vào giỏ -> giỏ hàng -> thanh toán -> hồ sơ -> (đặt hàng);
+//          sau SESSION_ITERS lượt (mặc định 10) thì đăng xuất và đăng nhập lại
 //
 // PROFILE:
 //   smoke     30 giây, 3 người: kiểm tra kịch bản, phải 0% lỗi
@@ -33,7 +34,10 @@ const DO_CHECKOUT = __ENV.DO_CHECKOUT === 'true';
 
 // Mỗi lượt khách gửi 6 request, mỗi lượt user gửi 8-9 request (theo kịch bản bên dưới).
 const GUEST_REQ = 6;
-const USER_REQ = DO_CHECKOUT ? 9 : 8;
+// User đăng nhập 1 lần rồi giữ session SESSION_ITERS lượt (như người dùng thật), nên mỗi lượt user trung bình
+// khoảng 5-6 request (thêm đăng nhập/đăng xuất ở lượt đầu/cuối của phiên).
+const SESSION_ITERS = Number(__ENV.SESSION_ITERS || 10);
+const USER_REQ = DO_CHECKOUT ? 6 : 5;
 // Đổi req/s mục tiêu thành số lượt/giây cho từng nhóm (80% request từ khách, 20% từ user).
 function rates(rps) {
   return { guest: Math.max(1, Math.round((rps * 0.8) / GUEST_REQ)), user: Math.max(1, Math.round((rps * 0.2) / USER_REQ)) };
@@ -44,8 +48,13 @@ const users = new SharedArray('users', () => {
   return lines.filter((l) => l.trim()).map((l) => { const [u, p] = l.split(','); return { u: u.trim(), p: p.trim() }; });
 });
 
+// User: số VU CỐ ĐỊNH (tạo sẵn, đăng nhập một lần). Nếu để k6 tự thêm VU khi server chậm, mỗi VU mới đều phải
+// đăng nhập -> "cơn bão đăng nhập" giả tạo làm sập phép đo. Hết VU rảnh thì k6 bỏ lượt (dropped_iterations).
+const USER_VUS = Number(__ENV.USER_VUS || 150);
 function arrival(exec, stages, startRate, maxVUs) {
-  return { executor: 'ramping-arrival-rate', exec, startRate, timeUnit: '1s', preAllocatedVUs: Math.min(maxVUs, 100), maxVUs, stages };
+  if (exec === 'user') maxVUs = USER_VUS;
+  const pre = exec === 'user' ? maxVUs : Math.min(maxVUs, 100);
+  return { executor: 'ramping-arrival-rate', exec, startRate, timeUnit: '1s', preAllocatedVUs: pre, maxVUs, stages };
 }
 
 function scenarios() {
@@ -93,6 +102,8 @@ export const options = {
     ...(PROFILE === 'ramp' ? { 'http_req_failed{scenario:guest}': [{ threshold: 'rate<0.10', abortOnFail: true, delayAbortEval: '30s' }] } : {}),
   },
   summaryTrendStats: ['avg', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
+  // Mặc định k6 xóa cookie sau mỗi lượt -> mất session đăng nhập. Giữ cookie; kịch bản khách tự xóa ở đầu lượt.
+  noCookiesReset: true,
   discardResponseBodies: false,
   insecureSkipTLSVerify: false,
   userAgent: 'greenmart-k6/1.0',
@@ -165,29 +176,39 @@ export function guest() {
 }
 
 // ---------- Người dùng đăng nhập ----------
-export function user() {
-  if (users.length === 0) fail('users.csv trống: chạy loadtest/jmeter/create_loadtest_users.py trước');
-  const acc = users[exec.scenario.iterationInTest % users.length];
-  http.cookieJar().clear(BASE);
-  let token, slug;
+// Mỗi VU giữ trạng thái riêng giữa các lượt: đăng nhập ở lượt đầu, dùng session SESSION_ITERS lượt,
+// rồi đăng xuất. Trước đây đăng nhập lại MỖI lượt -> băm mật khẩu (PBKDF2 1 triệu vòng) chiếm khoảng 30% CPU cluster,
+// không giống người dùng thật (đăng nhập một lần cho cả buổi).
+let session = null; // { acc, left } của VU này
 
+function login() {
+  const acc = users[(exec.vu.idInTest - 1) % users.length]; // mỗi VU một tài khoản
+  http.cookieJar().clear(BASE);
+  let ok = false;
   group('U01 Đăng nhập', () => {
     const page = get('U01 Trang đăng nhập', '/loginn/');
-    token = csrf(page);
+    const token = csrf(page);
     check(page, { 'U01 200': (x) => x.status === 200 });
     if (!token) return;
     const r = post('U02 POST Đăng nhập', '/loginn/', { fnm: acc.u, password: acc.p, csrfmiddlewaretoken: token });
-    check(r, { 'U02 đăng nhập được': (x) => x.status === 200 && (x.body || '').includes(`Xin chào, ${acc.u}`) });
+    ok = check(r, { 'U02 đăng nhập được': (x) => x.status === 200 && (x.body || '').includes(`Xin chào, ${acc.u}`) });
   });
-  if (!token) return;
+  session = ok ? { acc, left: SESSION_ITERS } : null;
+  return ok;
+}
+
+export function user() {
+  if (users.length === 0) fail('users.csv trống: chạy loadtest/jmeter/create_loadtest_users.py trước');
+  if (!session && !login()) return;
   think();
+  let token, slug;
   group('U03 Danh sách sản phẩm', () => {
     const r = get('U03 Danh sách', '/productPage/');
     check(r, { 'U03 200': (x) => x.status === 200 });
     slug = randomSlug(r);
-    token = csrf(r) || token;
+    token = csrf(r);
   });
-  if (!slug) return;
+  if (!slug || !token) { session = null; return; } // mất session/trang lỗi: đăng nhập lại lượt sau
   think();
   group('U04 Thêm vào giỏ', () => {
     const r = post('U04 Thêm vào giỏ', `/add-to-cart/${slug}`, { csrfmiddlewaretoken: token });
@@ -212,9 +233,13 @@ export function user() {
       check(get('U08 Hoàn tất đơn', '/complete/'), { 'U08 200': (x) => x.status === 200 });
     });
   }
-  think();
-  group('U09 Đăng xuất', () => {
-    check(get('U09 Đăng xuất', '/logout/'), { 'U09 200': (x) => x.status === 200 });
-  });
+  session.left -= 1;
+  if (session.left <= 0) { // hết phiên: đăng xuất, lượt sau đăng nhập lại
+    think();
+    group('U09 Đăng xuất', () => {
+      check(get('U09 Đăng xuất', '/logout/'), { 'U09 200': (x) => x.status === 200 });
+    });
+    session = null;
+  }
   think();
 }

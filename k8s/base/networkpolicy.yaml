@@ -50,6 +50,7 @@ spec:
       operator: In
       values:
       - web
+      - web-auth
       - user-service
       - catalog-service
   policyTypes:
@@ -88,6 +89,9 @@ spec:
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: web
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: web-auth
     ports:
     - protocol: TCP
       port: 8000

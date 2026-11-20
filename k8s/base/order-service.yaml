@@ -65,6 +65,10 @@ spec:
               key: ORDER_DB_PASSWORD
         - name: RUN_MIGRATE
           value: '0'
+        # Ghi đè DB_CONN_MAX_AGE=0 của overlay EKS: order-service chạm MySQL ở gần như mọi request, mở kết nối mới mỗi
+        # lần làm RDS tốn CPU. Giữ kết nối 60s: tối đa 4 pod x 2 worker x 4 thread = 32 kết nối (RDS cho 150).
+        - name: DB_CONN_MAX_AGE
+          value: '60'
         readinessProbe:
           httpGet:
             path: /health/

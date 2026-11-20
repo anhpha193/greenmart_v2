@@ -27,6 +27,7 @@ data:
         map $http_x_forwarded_proto $fwd_proto { default $http_x_forwarded_proto; "" $scheme; }
 
         upstream web             { server web:8000; keepalive 32; }
+        upstream web_auth        { server web-auth:8000; keepalive 16; }
         upstream user_service    { server user-service:8000; keepalive 32; }
         upstream catalog_service { server catalog-service:8000; keepalive 32; }
 
@@ -40,6 +41,8 @@ data:
             location /media/  { alias /media/; }
             location = /metrics { return 404; }
 
+            # Đăng nhập/đăng ký/đặt lại mật khẩu sang web-auth (tách khỏi web để không làm treo trang mua sắm)
+            location ~ ^/(loginn|register|resert)  { proxy_pass http://web_auth; include /etc/nginx/proxy_params; }
             location /admin/catalog/ { proxy_pass http://catalog_service; include /etc/nginx/proxy_params; }
             location /admin/         { proxy_pass http://user_service;    include /etc/nginx/proxy_params; }
             location /               { proxy_pass http://web;             include /etc/nginx/proxy_params; }

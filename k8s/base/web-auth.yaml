@@ -1,0 +1,131 @@
+# web-auth: cùng image/cấu hình với web nhưng chỉ phục vụ đăng nhập, đăng ký, đặt lại mật khẩu (gateway định tuyến).
+# Đăng nhập tốn CPU (băm mật khẩu PBKDF2) và chờ user-service lâu; tách riêng để một đợt đăng nhập dồn dập
+# không chiếm hết thread của web làm treo cả trang mua sắm (bulkhead). Session dùng chung (Valkey + web_db).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-auth
+  labels:
+    app.kubernetes.io/name: web-auth
+    app.kubernetes.io/part-of: greenmart
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web-auth
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web-auth
+        app.kubernetes.io/part-of: greenmart
+        greenmart/db-client: 'true'
+    spec:
+      # Rải pod đều các node: không để một node 100% CPU trong khi node khác còn trống
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: web-auth
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: app
+        image: greenmart/web
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: greenmart-config
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: greenmart-secrets
+              key: SECRET_KEY
+        - name: INTERNAL_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: greenmart-secrets
+              key: INTERNAL_API_TOKEN
+        - name: DB_NAME
+          value: web_db
+        - name: DB_USER
+          value: web_svc
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: greenmart-secrets
+              key: WEB_DB_PASSWORD
+        - name: RUN_MIGRATE
+          value: '0'
+        # web chủ yếu CHỜ (Valkey, order/user-service), ít tính toán: 8 thread/worker thay vì 4.
+        # 2 worker x 8 thread = 16 request cùng lúc mỗi pod; tối đa 8 pod = 128 (trước là 64, là trần ở khoảng 440 req/s).
+        - name: GUNICORN_THREADS
+          value: '8'
+        - name: ALLOWED_HOSTS
+          valueFrom:
+            configMapKeyRef:
+              name: greenmart-config
+              key: WEB_ALLOWED_HOSTS
+        readinessProbe:
+          httpGet:
+            path: /healthz/
+            port: 8000
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          # Không giới hạn CPU: giới hạn 1 core làm pod bị bóp (throttle) theo từng 100ms ngay cả khi node còn dư,
+          # gây các đợt p95 tăng vọt. requests.cpu vẫn giữ để lịch pod và để HPA tính % sử dụng.
+          limits:
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+            - DAC_OVERRIDE
+            - FOWNER
+            - SETGID
+            - SETUID
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-auth
+  labels:
+    app.kubernetes.io/name: web-auth
+    app.kubernetes.io/part-of: greenmart
+spec:
+  selector:
+    app.kubernetes.io/name: web-auth
+  ports:
+  - name: http
+    port: 8000
+    targetPort: http

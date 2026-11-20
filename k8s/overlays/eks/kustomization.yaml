@@ -64,7 +64,7 @@ patches:
         DB_CONN_MAX_AGE: "0"              # RDS micro chỉ 60-150 kết nối; giữ kết nối theo thread sẽ vượt giới hạn khi HPA scale
 
   # --- Mọi service đọc thêm ConfigMap greenmart-infra (Terraform tạo): REDIS_URL, MEDIA_BUCKET, ORDER_EVENTS_QUEUE_URL... ---
-  - target: { kind: Deployment, labelSelector: "app.kubernetes.io/part-of=greenmart,app.kubernetes.io/name in (web,user-service,catalog-service,order-service,promotion-service)" }
+  - target: { kind: Deployment, labelSelector: "app.kubernetes.io/part-of=greenmart,app.kubernetes.io/name in (web,web-auth,user-service,catalog-service,order-service,promotion-service)" }
     patch: |-
       - op: add
         path: /spec/template/spec/containers/0/envFrom/-
