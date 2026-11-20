@@ -17,7 +17,7 @@ spec:
   podMetricsEndpoints:
     - port: http
       path: /metrics
-      interval: 15s
+      interval: 30s   # 30s: đủ cho dashboard, bớt CPU cho Prometheus và cho các pod phải trả /metrics
       relabelings:
         - action: replace
           sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]

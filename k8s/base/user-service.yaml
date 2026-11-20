@@ -89,8 +89,9 @@ spec:
           requests:
             cpu: 100m
             memory: 192Mi
+          # Không giới hạn CPU: giới hạn 1 core làm pod bị bóp (throttle) theo từng 100ms ngay cả khi node còn dư,
+          # gây các đợt p95 tăng vọt. requests.cpu vẫn giữ để lịch pod và để HPA tính % sử dụng.
           limits:
-            cpu: '1'
             memory: 512Mi
         securityContext:
           allowPrivilegeEscalation: false

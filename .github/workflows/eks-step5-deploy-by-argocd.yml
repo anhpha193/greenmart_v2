@@ -56,6 +56,8 @@ jobs:
           kubectl -n argocd scale deployment/argocd-dex-server deployment/argocd-notifications-controller --replicas=0 || true
           kubectl -n argocd rollout status deployment/argocd-server deployment/argocd-repo-server deployment/argocd-applicationset-controller --timeout=300s
           kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
+          # ApplicationSet không dùng (chỉ có Application thường): tắt để trả CPU/RAM cho ứng dụng
+          kubectl -n argocd scale deployment/argocd-applicationset-controller --replicas=0 || true
 
       # Repo private: đăng ký thông tin đọc repo cho Argo CD (bỏ qua nếu không đặt ARGOCD_REPO_TOKEN)
       - name: Đăng ký repository cho Argo CD

@@ -1,5 +1,5 @@
 # Build context = thư mục gốc dự án (docker compose đã cấu hình): docker build -f services/catalog-service/Dockerfile .
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

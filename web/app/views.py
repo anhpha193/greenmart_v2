@@ -1,5 +1,7 @@
 """Storefront (BFF). Mọi dữ liệu lấy qua API của user/catalog/order/promotion-service.
 URL, tên route và thông báo hiển thị giữ nguyên như bản monolith."""
+import time
+
 from django.contrib import messages
 from django.http import Http404
 from django.shortcuts import redirect, render
@@ -7,7 +9,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST  # noqa: F401  (giữ để dễ bật khi cần)
 
 from greenmart.auth import login_required, login_user, logout_user
-from greenmart.services import catalog, orders, promotions, users
+from greenmart.services import catalog, catalog_read, orders, promotions, users
 from greenmart.viewmodel import to_view
 from greenmart_common.client import NotFound, ServiceError
 
@@ -27,18 +29,38 @@ def cart_summary(request):
     return orders.post("/api/carts/current/", json=cart_owner(request))
 
 
+# Số món trong giỏ hiện ở góc mọi trang. Trước đây MỖI trang gọi order-service (khách vãng lai còn bị tạo
+# hẳn một giỏ trống + session trong MySQL chỉ để hiện số 0). Giờ: khách chưa có session = chưa có giỏ = 0;
+# còn lại nhớ số này trong session, cập nhật ngay khi thêm/bớt/đặt hàng, và hỏi lại order-service sau 60 giây
+# (phòng khi giỏ đổi ở thiết bị khác).
+CART_COUNT_KEY = "cart_count"
+CART_COUNT_TTL = 60
+
+
+def remember_cart_count(request, count):
+    request.session[CART_COUNT_KEY] = [int(count or 0), time.time()]
+
+
 def cart_count(request):
-    return cart_summary(request)["get_cart_items"]
+    saved = request.session.get(CART_COUNT_KEY)
+    if saved and time.time() - saved[1] < CART_COUNT_TTL:
+        return saved[0]
+    if not request.user.is_authenticated and not request.session.session_key:
+        return 0
+    count = cart_summary(request)["get_cart_items"]
+    remember_cart_count(request, count)
+    return count
 
 
 def get_cart(request, prune_hidden=False):
     data = orders.post("/api/carts/current/", json={**cart_owner(request), "detail": True, "prune_hidden": prune_hidden})
+    remember_cart_count(request, data.get("get_cart_items"))
     return to_view(data)
 
 
 def get_product_or_404(slug):
     try:
-        return catalog.get(f"/api/products/{slug}/")
+        return catalog_read.get(f"/api/products/{slug}/")
     except NotFound:
         raise Http404("Sản phẩm không tồn tại")
 
@@ -53,7 +75,7 @@ def redirect_back(request, default="/"):
 # ---------- trang chủ / sản phẩm ----------
 
 def home(request):
-    products = to_view(catalog.get("/api/products/", params={"featured": "true"}))
+    products = to_view(catalog_read.get("/api/products/", params={"featured": "true"}))
     return render(request, "index.html", {"products": products, "items": cart_count(request)})
 
 
@@ -62,8 +84,8 @@ def product(request):
 
 
 def productPage(request):
-    categories = to_view(catalog.get("/api/categories/"))
-    products = to_view(catalog.get("/api/products/", params={"status": "available"}))
+    categories = to_view(catalog_read.get("/api/categories/"))
+    products = to_view(catalog_read.get("/api/products/", params={"status": "available"}))
     return render(request, "productPage.html", {"categories": categories, "products": products,
                                                 "items": cart_count(request)})
 
@@ -72,7 +94,7 @@ def detail(request, slug):
     data = get_product_or_404(slug)
     reviews = data.pop("reviews", [])
     review_count = data.get("review_count", 0)
-    categories = to_view(catalog.get("/api/categories/"))
+    categories = to_view(catalog_read.get("/api/categories/"))
     return render(request, "detail.html", {
         "product": to_view(data), "categories": categories, "items": cart_count(request),
         "reviews": to_view(reviews), "review_count": review_count,
@@ -81,7 +103,7 @@ def detail(request, slug):
 
 def search(request):
     query = request.GET.get("q", "").strip()
-    products = to_view(catalog.get("/api/products/", params={"q": query})) if query else []
+    products = to_view(catalog_read.get("/api/products/", params={"q": query})) if query else []
     return render(request, "search.html", {"query": query, "products": products, "items": cart_count(request)})
 
 
@@ -103,7 +125,8 @@ def cart(request):
 
 def _change_quantity(request, slug, delta):
     product_ = get_product_or_404(slug)
-    orders.post("/api/carts/current/items/", json={**cart_owner(request), "product_id": product_["id"], "delta": delta})
+    res = orders.post("/api/carts/current/items/", json={**cart_owner(request), "product_id": product_["id"], "delta": delta})
+    remember_cart_count(request, res.get("get_cart_items"))
     return product_
 
 
@@ -122,7 +145,8 @@ def add_to_cart_detail(request, slug):
     except (TypeError, ValueError):
         messages.error(request, "Số lượng không hợp lệ.")
         return redirect_back(request)
-    orders.post("/api/carts/current/items/", json={**cart_owner(request), "product_id": product_["id"], "delta": quantity})
+    res = orders.post("/api/carts/current/items/", json={**cart_owner(request), "product_id": product_["id"], "delta": quantity})
+    remember_cart_count(request, res.get("get_cart_items"))
     messages.success(request, f"✅ {product_['name']} đã được thêm vào giỏ hàng!")
     return redirect_back(request)
 
@@ -159,6 +183,7 @@ def checkout(request):
 def complete_cart(request):
     try:
         order = to_view(orders.post("/api/orders/complete/", json={"customer_id": request.user.id}))
+        remember_cart_count(request, 0)
     except NotFound:
         return render(request, "complete.html", {"order": None})
     total_money = order["get_total_after_discount"] if order["promotion"] else order["get_cart_total"]

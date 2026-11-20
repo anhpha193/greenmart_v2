@@ -67,11 +67,11 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (service) (rate(django_http_responses_total_by_status_view_method_total{view!~\"greenmart_common.health.health|django_prometheus.exports.ExportToDjangoView\"}[1m]))",
+          "expr": "sum by (service) (rate(django_http_responses_total_by_status_view_method_total{view!~\"greenmart_common.health.health|django_prometheus.exports.ExportToDjangoView\"}[2m]))",
           "legendFormat": "{{service}}",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         }
       ],
       "fieldConfig": {
@@ -126,11 +126,11 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (service) (rate(django_http_responses_total_by_status_view_method_total{status=~\"5..\",view!~\"greenmart_common.health.health|django_prometheus.exports.ExportToDjangoView\"}[1m]))",
+          "expr": "sum by (service) (rate(django_http_responses_total_by_status_view_method_total{status=~\"5..\",view!~\"greenmart_common.health.health|django_prometheus.exports.ExportToDjangoView\"}[2m]))",
           "legendFormat": "{{service}}",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         }
       ],
       "fieldConfig": {
@@ -189,7 +189,7 @@
           "legendFormat": "{{service}}",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         }
       ],
       "fieldConfig": {
@@ -248,7 +248,7 @@
           "legendFormat": "{{horizontalpodautoscaler}}",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         },
         {
           "datasource": {
@@ -260,7 +260,7 @@
           "legendFormat": "{{horizontalpodautoscaler}} tối đa",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         }
       ],
       "fieldConfig": {
@@ -328,11 +328,11 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m]))) * 100",
+          "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m]))) * 100",
           "legendFormat": "{{instance}}",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         }
       ],
       "fieldConfig": {
@@ -391,7 +391,7 @@
           "legendFormat": "{{instance}}",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         }
       ],
       "fieldConfig": {
@@ -446,11 +446,11 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (app) (label_replace(rate(container_cpu_usage_seconds_total{namespace=\"greenmart\",container!=\"\",container!=\"POD\"}[1m]), \"app\", \"$1\", \"pod\", \"(.+)-[a-z0-9]+-[a-z0-9]{5}\")) * 1000",
+          "expr": "sum by (app) (label_replace(rate(container_cpu_usage_seconds_total{namespace=\"greenmart\",container!=\"\",container!=\"POD\"}[2m]), \"app\", \"$1\", \"pod\", \"(.+)-[a-z0-9]+-[a-z0-9]{5}\")) * 1000",
           "legendFormat": "{{app}}",
           "editorMode": "code",
           "range": true,
-          "interval": "30s"
+          "interval": "1m"
         }
       ],
       "fieldConfig": {

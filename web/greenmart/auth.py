@@ -52,6 +52,7 @@ def login_user(request, user):
         "checked_at": time.time(),
     }
     request.user = SessionUser(request.session["user"])
+    request.session.pop("cart_count", None)  # giỏ khách vãng lai sẽ được gộp: đếm lại ở trang kế tiếp
     if guest_token:
         try:
             orders.post("/api/carts/merge/", json={"guest_token": guest_token, "customer_id": user["id"]})
