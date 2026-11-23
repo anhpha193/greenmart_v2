@@ -13,6 +13,7 @@ from django.views.decorators.http import require_POST  # noqa: F401  (giữ đ�
 from greenmart.auth import login_required, login_user, logout_user
 from greenmart.services import catalog, catalog_read, orders, promotions, users
 from greenmart.viewmodel import to_view
+from greenmart_common.cache import bump_version, cached
 from greenmart_common.client import NotFound, ServiceError
 
 
@@ -64,6 +65,16 @@ def get_cart(request, prune_hidden=False):
     data = orders.post("/api/carts/current/", json={**cart_owner(request), "detail": True, "prune_hidden": prune_hidden})
     remember_cart_count(request, data.get("get_cart_items"))
     return to_view(data)
+
+
+# Hồ sơ (họ tên, SĐT, địa chỉ) hiển thị ở trang thanh toán và hồ sơ: cache trong Valkey 5 phút theo user, có
+# phiên bản -> sửa hồ sơ xong thấy ngay. Chỉ để hiển thị; quyền truy cập vẫn do session + user-service quyết định.
+PROFILE_TTL = 300
+
+
+def get_profile(user_id):
+    path = f"/api/users/{user_id}/profile/"
+    return cached(f"profile:{user_id}", "p", PROFILE_TTL, lambda: users.get(path))
 
 
 def get_product_or_404(slug):
@@ -185,7 +196,7 @@ def checkout(request):
         messages.warning(request, "Giỏ hàng đang trống.")
         return redirect("cart")
 
-    profile = users.get(f"/api/users/{request.user.id}/profile/")
+    profile = get_profile(request.user.id)
     total_money = order["get_total_after_discount"] if order["promotion"] else order["get_cart_total"]
     return render(request, "checkout.html", {
         "order": order,
@@ -303,9 +314,10 @@ def profile_view(request):
     if request.method == "POST":
         users.put(path, json={"full_name": request.POST.get("full_name"), "phone": request.POST.get("phone"),
                               "address": request.POST.get("address")})
+        bump_version(f"profile:{request.user.id}")
         messages.success(request, "✅ Cập nhật thông tin thành công!")
         return redirect("profile")
-    return render(request, "profile.html", {"profile": users.get(path)})
+    return render(request, "profile.html", {"profile": get_profile(request.user.id)})
 
 
 def password_reset(request):

@@ -8,7 +8,7 @@ top view Django theo request/s, tỉ lệ /api/me/ trong request tới web.
 import json, sys, urllib.parse, urllib.request
 from datetime import datetime
 
-PROM = "http://localhost:9090/api/v1/query"
+PROM = "http://localhost:" + __import__("os").environ.get("PROM_PORT","9090") + "/api/v1/query"
 if len(sys.argv) != 3:
     sys.exit(__doc__)
 t0, t1 = (datetime.fromisoformat(a.replace("Z", "+00:00")).timestamp() for a in sys.argv[1:])
