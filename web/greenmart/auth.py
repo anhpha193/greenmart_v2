@@ -43,7 +43,9 @@ class AnonymousUser:
 
 
 def login_user(request, user):
-    """Ghi user vào session, đổi session key (chống session fixation) và gộp giỏ hàng khách vãng lai."""
+    """Ghi user vào session, đổi session key (chống session fixation) và gộp giỏ hàng khách vãng lai.
+    Trả {tên bước: ms} để view gắn header Server-Timing."""
+    t0 = time.perf_counter()
     guest_token = request.session.session_key
     request.session.cycle_key()
     request.session["user"] = {
@@ -53,11 +55,13 @@ def login_user(request, user):
     }
     request.user = SessionUser(request.session["user"])
     request.session.pop("cart_count", None)  # giỏ khách vãng lai sẽ được gộp: đếm lại ở trang kế tiếp
+    t1 = time.perf_counter()
     if guest_token:
         try:
             orders.post("/api/carts/merge/", json={"guest_token": guest_token, "customer_id": user["id"]})
         except ServiceError:
             log.warning("Không gộp được giỏ hàng khách vãng lai sau khi đăng nhập", exc_info=True)
+    return {"session": (t1 - t0) * 1000, "merge": (time.perf_counter() - t1) * 1000}
 
 
 def logout_user(request):

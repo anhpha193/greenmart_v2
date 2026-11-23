@@ -3,9 +3,11 @@ URL, tên route và thông báo hiển thị giữ nguyên như bản monolith."
 import time
 
 from django.contrib import messages
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.cache import never_cache
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST  # noqa: F401  (giữ để dễ bật khi cần)
 
 from greenmart.auth import login_required, login_user, logout_user
@@ -38,7 +40,13 @@ CART_COUNT_TTL = 60
 
 
 def remember_cart_count(request, count):
-    request.session[CART_COUNT_KEY] = [int(count or 0), time.time()]
+    count = int(count or 0)
+    saved = request.session.get(CART_COUNT_KEY)
+    # session dạng cached_db: mỗi lần sửa session là một lệnh ghi web_db. Số món không đổi và bản lưu còn mới
+    # (chưa quá nửa TTL) thì không ghi lại.
+    if saved and saved[0] == count and time.time() - saved[1] < CART_COUNT_TTL / 2:
+        return
+    request.session[CART_COUNT_KEY] = [count, time.time()]
 
 
 def cart_count(request):
@@ -76,7 +84,7 @@ def redirect_back(request, default="/"):
 
 def home(request):
     products = to_view(catalog_read.get("/api/products/", params={"featured": "true"}))
-    return render(request, "index.html", {"products": products, "items": cart_count(request)})
+    return render(request, "index.html", {"products": products})
 
 
 def product(request):
@@ -86,8 +94,7 @@ def product(request):
 def productPage(request):
     categories = to_view(catalog_read.get("/api/categories/"))
     products = to_view(catalog_read.get("/api/products/", params={"status": "available"}))
-    return render(request, "productPage.html", {"categories": categories, "products": products,
-                                                "items": cart_count(request)})
+    return render(request, "productPage.html", {"categories": categories, "products": products})
 
 
 def detail(request, slug):
@@ -96,7 +103,7 @@ def detail(request, slug):
     review_count = data.get("review_count", 0)
     categories = to_view(catalog_read.get("/api/categories/"))
     return render(request, "detail.html", {
-        "product": to_view(data), "categories": categories, "items": cart_count(request),
+        "product": to_view(data), "categories": categories,
         "reviews": to_view(reviews), "review_count": review_count,
     })
 
@@ -104,7 +111,7 @@ def detail(request, slug):
 def search(request):
     query = request.GET.get("q", "").strip()
     products = to_view(catalog_read.get("/api/products/", params={"q": query})) if query else []
-    return render(request, "search.html", {"query": query, "products": products, "items": cart_count(request)})
+    return render(request, "search.html", {"query": query, "products": products})
 
 
 def policy(request):
@@ -130,10 +137,21 @@ def _change_quantity(request, slug, delta):
     return product_
 
 
+def _wants_json(request):
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+
+def _added_response(request, product_):
+    text = f"✅ {product_['name']} đã được thêm vào giỏ hàng!"
+    if _wants_json(request):
+        return JsonResponse({"ok": True, "cart_count": cart_count(request), "message": text})
+    messages.success(request, text)
+    return redirect_back(request)
+
+
 def add_to_cart(request, slug):
     product_ = _change_quantity(request, slug, 1)
-    messages.success(request, f"✅ {product_['name']} đã được thêm vào giỏ hàng!")
-    return redirect_back(request)
+    return _added_response(request, product_)
 
 
 def add_to_cart_detail(request, slug):
@@ -147,8 +165,7 @@ def add_to_cart_detail(request, slug):
         return redirect_back(request)
     res = orders.post("/api/carts/current/items/", json={**cart_owner(request), "product_id": product_["id"], "delta": quantity})
     remember_cart_count(request, res.get("get_cart_items"))
-    messages.success(request, f"✅ {product_['name']} đã được thêm vào giỏ hàng!")
-    return redirect_back(request)
+    return _added_response(request, product_)
 
 
 def arrow_up(request, slug):
@@ -227,6 +244,7 @@ def cancel_promotion(request, promo_id):
 
 def loginn(request):
     if request.method == "POST":
+        t0 = time.perf_counter()
         try:
             user = users.post("/api/auth/login/", json={
                 "username": request.POST.get("fnm"), "password": request.POST.get("password")})
@@ -234,8 +252,14 @@ def loginn(request):
             if exc.status == 401:
                 return redirect("loginn")
             raise
-        login_user(request, user)
-        return redirect("home")
+        t_auth = time.perf_counter()
+        timing = login_user(request, user)
+        resp = redirect("home")
+        # Thời gian từng phần (ms) để đo bằng k6/trình duyệt (DevTools > Network > Timing): auth = user-service
+        # kiểm tra mật khẩu, session = đổi session key, merge = gộp giỏ khách vào giỏ user.
+        resp["Server-Timing"] = ", ".join(
+            [f"auth;dur={(t_auth - t0) * 1000:.0f}"] + [f"{k};dur={v:.0f}" for k, v in timing.items()])
+        return resp
     return render(request, "login.html")
 
 
@@ -356,3 +380,16 @@ def reply_review(request, review_id):
     if not slug:
         raise Http404("Đánh giá không tồn tại")
     return redirect("detail", slug=slug)
+
+
+@never_cache
+@ensure_csrf_cookie
+def me(request):
+    """Phần riêng của người đang xem cho các trang công khai (gm.js gọi). Đặt cookie csrftoken để JS điền vào form."""
+    u = request.user
+    return JsonResponse({
+        "authenticated": u.is_authenticated,
+        "username": u.username if u.is_authenticated else "",
+        "cart_count": cart_count(request),
+        "messages": [str(m) for m in messages.get_messages(request)],
+    })

@@ -1,6 +1,7 @@
 """order-service: giỏ hàng & đơn hàng. Database riêng: order_db (MySQL). Không expose ra ngoài gateway."""
 from pathlib import Path
 
+from greenmart_common.cache import cache_settings
 from greenmart_common.env import env, env_bool, env_list, mysql_database
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -30,6 +31,7 @@ WSGI_APPLICATION = "order_service.wsgi.application"
 
 DATABASES = {"default": mysql_database("DB")}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+CACHES = cache_settings("order")
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

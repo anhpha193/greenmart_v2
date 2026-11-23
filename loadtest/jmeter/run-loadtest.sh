@@ -8,7 +8,7 @@
 # Cần: Java 17+, JMeter 5.6.x (JMETER_HOME hoặc `jmeter` trong PATH), users.csv (tạo bằng create_loadtest_users.py).
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_BASE="http://k8s-greenmart-d003b7e256-305952565.ap-southeast-1.elb.amazonaws.com"   # ĐỔI khi cluster tạo lại (ALB mới)
+DEFAULT_BASE="http://k8s-greenmart-d003b7e256-1604314211.ap-southeast-1.elb.amazonaws.com"   # ĐỔI khi cluster tạo lại (ALB mới)
 BASE_URL="${1:-${BASE:-$DEFAULT_BASE}}"; PROFILE="${2:-smoke}"
 if [ -n "${3:-}" ]; then DO_CHECKOUT="$3"; elif [ "$PROFILE" = checkout ]; then DO_CHECKOUT=true; else DO_CHECKOUT=false; fi
 shift $(( $# >= 3 ? 3 : $# ))

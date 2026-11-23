@@ -8,7 +8,7 @@
 # k6: biến K6 hoặc D:\Tools\k6\k6.exe hoặc `k6` trong PATH. Cần users.csv (loadtest/jmeter/create_loadtest_users.py).
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_BASE="http://k8s-greenmart-d003b7e256-305952565.ap-southeast-1.elb.amazonaws.com"   # ĐỔI khi cluster tạo lại (ALB mới)
+DEFAULT_BASE="http://k8s-greenmart-d003b7e256-1604314211.ap-southeast-1.elb.amazonaws.com"   # ĐỔI khi cluster tạo lại (ALB mới)
 BASE_URL="${1:-${BASE:-$DEFAULT_BASE}}"; BASE_URL="${BASE_URL%/}"; PROFILE="${2:-smoke}"
 shift $(( $# >= 2 ? 2 : $# ))
 

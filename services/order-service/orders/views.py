@@ -191,7 +191,7 @@ class CompleteOrderView(APIView):
             order = Order.objects.select_for_update().filter(customer_id=customer_id, complete=False).order_by("id").first()
             if order is None:
                 return Response({"error": "no_open_cart"}, status=404)
-            products = fetch_products(i.product_id for i in order.items.all())
+            products = fetch_products((i.product_id for i in order.items.all()), fresh=True)
             for item in order.items.all():
                 p = products.get(item.product_id)
                 if p:

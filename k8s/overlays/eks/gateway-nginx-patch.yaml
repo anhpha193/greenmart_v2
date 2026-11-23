@@ -25,6 +25,10 @@ data:
 
         map $http_x_forwarded_proto $fwd_proto { default $http_x_forwarded_proto; "" $scheme; }
 
+        # Microcache cho 4 trang công khai (HTML giống nhau cho mọi người; phần riêng do gm.js lấy qua /api/me/).
+        # Mỗi trang chỉ render lại tối đa 1 lần mỗi 3 giây cho mọi người dùng; response có Set-Cookie không bao giờ được cache.
+        proxy_cache_path /var/cache/nginx/micro levels=1:2 keys_zone=micro:10m max_size=100m inactive=60s use_temp_path=off;
+
         upstream web             { server web:8000; keepalive 32; }
         upstream web_auth        { server web-auth:8000; keepalive 16; }
         upstream user_service    { server user-service:8000; keepalive 32; }
@@ -42,6 +46,35 @@ data:
 
             # Đăng nhập/đăng ký/đặt lại mật khẩu sang web-auth (tách khỏi web để không làm treo trang mua sắm)
             location ~ ^/(loginn|register|resert)  { proxy_pass http://web_auth; include /etc/nginx/proxy_params; }
+            # Trang công khai: qua microcache
+            location = / {
+                proxy_pass http://web; include /etc/nginx/proxy_params;
+                proxy_cache micro; proxy_cache_key "$scheme$host$request_uri"; proxy_cache_valid 200 3s;
+                proxy_cache_lock on; proxy_cache_lock_timeout 2s; proxy_cache_use_stale updating error timeout; proxy_cache_background_update on;
+                proxy_ignore_headers Vary Cache-Control Expires;   # Set-Cookie KHÔNG bị bỏ qua: có Set-Cookie thì không cache
+                add_header X-Cache $upstream_cache_status always;
+            }
+            location /productPage/ {
+                proxy_pass http://web; include /etc/nginx/proxy_params;
+                proxy_cache micro; proxy_cache_key "$scheme$host$request_uri"; proxy_cache_valid 200 3s;
+                proxy_cache_lock on; proxy_cache_lock_timeout 2s; proxy_cache_use_stale updating error timeout; proxy_cache_background_update on;
+                proxy_ignore_headers Vary Cache-Control Expires;   # Set-Cookie KHÔNG bị bỏ qua: có Set-Cookie thì không cache
+                add_header X-Cache $upstream_cache_status always;
+            }
+            location /detail/ {
+                proxy_pass http://web; include /etc/nginx/proxy_params;
+                proxy_cache micro; proxy_cache_key "$scheme$host$request_uri"; proxy_cache_valid 200 3s;
+                proxy_cache_lock on; proxy_cache_lock_timeout 2s; proxy_cache_use_stale updating error timeout; proxy_cache_background_update on;
+                proxy_ignore_headers Vary Cache-Control Expires;   # Set-Cookie KHÔNG bị bỏ qua: có Set-Cookie thì không cache
+                add_header X-Cache $upstream_cache_status always;
+            }
+            location = /search {
+                proxy_pass http://web; include /etc/nginx/proxy_params;
+                proxy_cache micro; proxy_cache_key "$scheme$host$request_uri"; proxy_cache_valid 200 3s;
+                proxy_cache_lock on; proxy_cache_lock_timeout 2s; proxy_cache_use_stale updating error timeout; proxy_cache_background_update on;
+                proxy_ignore_headers Vary Cache-Control Expires;   # Set-Cookie KHÔNG bị bỏ qua: có Set-Cookie thì không cache
+                add_header X-Cache $upstream_cache_status always;
+            }
             location /admin/catalog/ { proxy_pass http://catalog_service; include /etc/nginx/proxy_params; }
             location /admin/         { proxy_pass http://user_service;    include /etc/nginx/proxy_params; }
             location /               { proxy_pass http://web;             include /etc/nginx/proxy_params; }

@@ -22,6 +22,7 @@ import http from 'k6/http';
 import { check, group, sleep, fail } from 'k6';
 import { SharedArray } from 'k6/data';
 import exec from 'k6/execution';
+import { Trend } from 'k6/metrics';
 
 const BASE = (__ENV.BASE_URL || '').replace(/\/$/, '');
 if (!/^https?:\/\/[^/]+$/.test(BASE)) {
@@ -33,11 +34,13 @@ const RPS_MAX = Number(__ENV.RPS_MAX || 500);
 const DO_CHECKOUT = __ENV.DO_CHECKOUT === 'true';
 
 // Mỗi lượt khách gửi 6 request, mỗi lượt user gửi 8-9 request (theo kịch bản bên dưới).
-const GUEST_REQ = 6;
+// Giống trình duyệt từ bản 1.2.3: mỗi trang công khai kéo theo 1 lần GET /api/me/ (gm.js), thêm giỏ là fetch
+// nhận JSON (không còn chuyển hướng 302). Lượt khách: 4 trang + 4 /api/me/ + thêm giỏ + giỏ hàng = 10 request.
+const GUEST_REQ = 10;
 // User đăng nhập 1 lần rồi giữ session SESSION_ITERS lượt (như người dùng thật), nên mỗi lượt user trung bình
 // khoảng 5-6 request (thêm đăng nhập/đăng xuất ở lượt đầu/cuối của phiên).
 const SESSION_ITERS = Number(__ENV.SESSION_ITERS || 10);
-const USER_REQ = DO_CHECKOUT ? 6 : 5;
+const USER_REQ = DO_CHECKOUT ? 7 : 6;
 // Đổi req/s mục tiêu thành số lượt/giây cho từng nhóm (80% request từ khách, 20% từ user).
 function rates(rps) {
   return { guest: Math.max(1, Math.round((rps * 0.8) / GUEST_REQ)), user: Math.max(1, Math.round((rps * 0.2) / USER_REQ)) };
@@ -109,8 +112,43 @@ export const options = {
   userAgent: 'greenmart-k6/1.0',
 };
 
-const think = () => sleep(0.3 + Math.random() * 0.6); // như JMeter stress: 300-900 ms
+// Nghỉ giữa các bước: mặc định 300-900 ms (như JMeter stress). Đo tải cao: giảm THINK_MIN/THINK_MAX (giây)
+// để cùng một req/s cần ít VU và ít kết nối TCP hơn (máy test và mạng nhà không chịu nổi >1.000 kết nối).
+const THINK_MIN = Number(__ENV.THINK_MIN || 0.3);
+const THINK_MAX = Number(__ENV.THINK_MAX || 0.9);
+const think = () => sleep(THINK_MIN + Math.random() * (THINK_MAX - THINK_MIN));
+
+// Thời gian từng phần của bước đăng nhập, lấy từ header Server-Timing do web-auth trả về
+const loginAuth = new Trend('login_auth_ms', true);
+const loginSession = new Trend('login_session_ms', true);
+const loginMerge = new Trend('login_merge_ms', true);
+function serverTiming(res) {
+  const out = {};
+  for (const part of String(res.headers['Server-Timing'] || '').split(',')) {
+    const m = /\s*(\w+);dur=([\d.]+)/.exec(part);
+    if (m) out[m[1]] = Number(m[2]);
+  }
+  return out;
+}
 const SEARCH = ['rau', 'nho', 'chanh', 'khoai', 'táo', 'cải', 'kw'];
+
+// Như gm.js: gọi /api/me/ sau mỗi trang công khai (tên user, số món giỏ, cookie csrftoken)
+function me(step) {
+  const r = http.get(`${BASE}/api/me/`, { tags: { name: `${step} /api/me/` }, headers: { Accept: 'application/json' } });
+  check(r, { 'api/me 200': (x) => x.status === 200 });
+  try { return r.json(); } catch (e) { return null; }
+}
+
+function csrfCookie() {
+  const c = http.cookieJar().cookiesForURL(BASE).csrftoken;
+  return c && c.length ? c[0] : null;
+}
+
+// Thêm vào giỏ như gm.js: fetch POST, nhận JSON
+function addToCart(name, slug, token) {
+  return http.post(`${BASE}/add-to-cart/${slug}`, { csrfmiddlewaretoken: token },
+    { tags: { name }, headers: { Referer: `${BASE}/`, 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' }, redirects: 0 });
+}
 
 function csrf(res) {
   const m = /name="csrfmiddlewaretoken" value="([^"]+)"/.exec(res.body || '');
@@ -143,29 +181,33 @@ export function guest() {
   group('G01 Trang chủ', () => {
     const r = get('G01 Trang chủ', '/');
     check(r, { 'G01 200': (x) => x.status === 200, 'G01 có tiêu đề': (x) => (x.body || '').includes('Green Grocer') });
+    me('G01');
   });
   think();
   group('G02 Danh sách sản phẩm', () => {
     const r = get('G02 Danh sách', '/productPage/');
     check(r, { 'G02 200': (x) => x.status === 200, 'G02 có nút thêm giỏ': (x) => (x.body || '').includes('Thêm vào giỏ') });
     slug = randomSlug(r);
-    token = csrf(r);
+    me('G02');
+    token = csrfCookie();
   });
   if (!slug || !token) return; // trang lỗi: bỏ lượt này (đã tính lỗi ở check trên)
   think();
   group('G03 Chi tiết sản phẩm', () => {
     const r = get('G03 Chi tiết', `/detail/${slug}`);
     check(r, { 'G03 200': (x) => x.status === 200 });
+    me('G03');
   });
   think();
   group('G04 Tìm kiếm', () => {
     const r = get('G04 Tìm kiếm', `/search?q=${encodeURIComponent(SEARCH[Math.floor(Math.random() * SEARCH.length)])}`);
     check(r, { 'G04 200': (x) => x.status === 200 });
+    me('G04');
   });
   think();
   group('G05 Thêm vào giỏ', () => {
-    const r = post('G05 Thêm vào giỏ', `/add-to-cart/${slug}`, { csrfmiddlewaretoken: token });
-    check(r, { 'G05 200': (x) => x.status === 200 });
+    const r = addToCart('G05 Thêm vào giỏ', slug, token);
+    check(r, { 'G05 200 JSON': (x) => x.status === 200 && (x.body || '').includes('cart_count') });
   });
   think();
   group('G06 Giỏ hàng', () => {
@@ -190,8 +232,18 @@ function login() {
     const token = csrf(page);
     check(page, { 'U01 200': (x) => x.status === 200 });
     if (!token) return;
-    const r = post('U02 POST Đăng nhập', '/loginn/', { fnm: acc.u, password: acc.p, csrfmiddlewaretoken: token });
-    ok = check(r, { 'U02 đăng nhập được': (x) => x.status === 200 && (x.body || '').includes(`Xin chào, ${acc.u}`) });
+    // Không tự theo chuyển hướng để đọc được header Server-Timing của chính response đăng nhập (302)
+    const r = http.post(`${BASE}/loginn/`, { fnm: acc.u, password: acc.p, csrfmiddlewaretoken: token },
+      { tags: { name: 'U02 POST Đăng nhập' }, headers: { Referer: `${BASE}/` }, redirects: 0 });
+    const t = serverTiming(r);
+    if (t.auth !== undefined) loginAuth.add(t.auth);
+    if (t.session !== undefined) loginSession.add(t.session);
+    if (t.merge !== undefined) loginMerge.add(t.merge);
+    const home = get('U02 Trang chủ sau đăng nhập', '/');
+    const info = me('U02');
+    ok = check(r, { 'U02 đăng nhập được (302)': (x) => x.status === 302 }) &&
+      check(home, { 'U02 trang chủ 200': (x) => x.status === 200 }) &&
+      check(info, { 'U02 /api/me/ đã đăng nhập': (x) => !!x && x.authenticated === true && x.username === acc.u });
   });
   session = ok ? { acc, left: SESSION_ITERS } : null;
   return ok;
@@ -206,13 +258,15 @@ export function user() {
     const r = get('U03 Danh sách', '/productPage/');
     check(r, { 'U03 200': (x) => x.status === 200 });
     slug = randomSlug(r);
-    token = csrf(r);
+    const info = me('U03');
+    if (!info || !info.authenticated) slug = null; // mất session
+    token = csrfCookie();
   });
   if (!slug || !token) { session = null; return; } // mất session/trang lỗi: đăng nhập lại lượt sau
   think();
   group('U04 Thêm vào giỏ', () => {
-    const r = post('U04 Thêm vào giỏ', `/add-to-cart/${slug}`, { csrfmiddlewaretoken: token });
-    check(r, { 'U04 200': (x) => x.status === 200 });
+    const r = addToCart('U04 Thêm vào giỏ', slug, token);
+    check(r, { 'U04 200 JSON': (x) => x.status === 200 && (x.body || '').includes('cart_count') });
   });
   think();
   group('U05 Giỏ hàng', () => {

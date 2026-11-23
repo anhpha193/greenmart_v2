@@ -32,8 +32,11 @@ class ServiceClient:
         # Chỉ retry GET (idempotent) khi gateway/service tạm lỗi.
         retry = Retry(total=2, backoff_factor=0.2, status_forcelist=(502, 503, 504),
                       allowed_methods=frozenset({"GET"}), raise_on_status=False)
-        self.session.mount("http://", HTTPAdapter(max_retries=retry))
-        self.session.mount("https://", HTTPAdapter(max_retries=retry))
+        # Pool mặc định chỉ 10 kết nối/host: gunicorn 8-16 thread gọi cùng lúc thì kết nối thừa bị đóng
+        # ("Connection pool is full, discarding connection") và lần sau phải mở lại. 32 là đủ cho mọi thread.
+        pool = dict(max_retries=retry, pool_connections=8, pool_maxsize=32)
+        self.session.mount("http://", HTTPAdapter(**pool))
+        self.session.mount("https://", HTTPAdapter(**pool))
 
     def request(self, method, path, **kwargs):
         kwargs.setdefault("timeout", self.timeout)
