@@ -33,6 +33,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "greenmart.middleware.RemoteUserMiddleware",   # request.user lấy từ user-service
     "django.contrib.messages.middleware.MessageMiddleware",
+    "greenmart.middleware.MeRefreshMiddleware",     # báo gm.js hỏi lại /api/me/ khi đăng nhập/giỏ/thông báo đổi
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "greenmart.middleware.ServiceErrorMiddleware",  # service phụ thuộc chết -> trang 503 thân thiện
 ]
@@ -74,6 +75,10 @@ CSRF_TRUSTED_ORIGINS += env_list("EXTRA_CSRF_TRUSTED_ORIGINS", "")
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+
+# Feature flag: gm.js lưu /api/me/ trong sessionStorage (1 lần gọi mỗi phiên thay vì mỗi trang).
+# Tắt (WEB_CLIENT_ME_CACHE=0) để quay về gọi /api/me/ ở mọi trang nếu thấy trạng thái hiển thị bị cũ.
+CLIENT_ME_CACHE = env_bool("WEB_CLIENT_ME_CACHE", True)
 
 LOGGING = {
     "version": 1,

@@ -1,3 +1,4 @@
+from django.conf import settings
 import logging
 import time
 
@@ -57,3 +58,36 @@ class ServiceErrorMiddleware:
             log.error("Service phụ thuộc không khả dụng: %s", exception)
             return render(request, "service_unavailable.html", {"service": exception.service}, status=503)
         return None
+
+
+ME_REFRESH_COOKIE = "gm_me"
+
+
+class MeRefreshMiddleware:
+    """Báo cho gm.js bỏ bản lưu /api/me/ (sessionStorage) khi trạng thái hiển thị đổi ở PHÍA SERVER:
+    đăng nhập/đăng xuất (session key đổi), số món trong giỏ đổi (trang giỏ, chốt đơn...), có thông báo mới.
+    Cách báo: đặt cookie gm_me=1 (JS đọc được); /api/me/ xóa cookie này sau khi trả trạng thái mới.
+    Cookie chỉ là tín hiệu "hãy hỏi lại", không chứa dữ liệu. Đặt SAU MessageMiddleware để thấy thông báo đang chờ."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        key_before = request.COOKIES.get(settings.SESSION_COOKIE_NAME)
+        count_before = (request.session.get("cart_count") or [None])[0]
+        response = self.get_response(request)
+        if request.path == "/api/me/":
+            if ME_REFRESH_COOKIE in request.COOKIES:
+                response.delete_cookie(ME_REFRESH_COOKIE, samesite="Lax")
+            return response
+        storage = getattr(request, "_messages", None)
+        # Thêm giỏ bằng fetch (gm.js): JS đã tự cập nhật số món từ JSON trả về, không cần báo hỏi lại.
+        via_js = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        changed = (
+            request.session.session_key != key_before
+            or (not via_js and (request.session.get("cart_count") or [None])[0] != count_before)
+            or bool(storage is not None and getattr(storage, "_queued_messages", None))
+        )
+        if changed:
+            response.set_cookie(ME_REFRESH_COOKIE, "1", max_age=300, samesite="Lax", httponly=False)
+        return response

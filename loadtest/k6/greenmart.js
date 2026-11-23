@@ -36,13 +36,21 @@ const DO_CHECKOUT = __ENV.DO_CHECKOUT === 'true';
 // Mỗi lượt khách gửi 6 request, mỗi lượt user gửi 8-9 request (theo kịch bản bên dưới).
 // Giống trình duyệt từ bản 1.2.3: mỗi trang công khai kéo theo 1 lần GET /api/me/ (gm.js), thêm giỏ là fetch
 // nhận JSON (không còn chuyển hướng 302). Lượt khách: 4 trang + 4 /api/me/ + thêm giỏ + giỏ hàng = 10 request.
-const GUEST_REQ = 10;
+// ME_MODE=legacy: gọi /api/me/ ở MỌI trang công khai (bản 1.2.3). ME_MODE=cached: như gm.js có sessionStorage
+// (bản 1.2.4) - mỗi "tab" chỉ gọi lại khi chưa có bản lưu, quá 5 phút, hoặc server đặt cookie gm_me.
+// Mỗi lượt khách là một tab mới (xóa cookie đầu lượt); user giữ tab suốt phiên đăng nhập.
+const ME_MODE = __ENV.ME_MODE || 'legacy';
+if (!['legacy', 'cached'].includes(ME_MODE)) throw new Error('ME_MODE phải là legacy hoặc cached');
+const GUEST_REQ = ME_MODE === 'cached' ? 7 : 10;
 // User đăng nhập 1 lần rồi giữ session SESSION_ITERS lượt (như người dùng thật), nên mỗi lượt user trung bình
 // khoảng 5-6 request (thêm đăng nhập/đăng xuất ở lượt đầu/cuối của phiên).
 const SESSION_ITERS = Number(__ENV.SESSION_ITERS || 10);
-const USER_REQ = DO_CHECKOUT ? 7 : 6;
+const USER_REQ = (DO_CHECKOUT ? 7 : 6) - (ME_MODE === 'cached' ? 1 : 0);
 // Đổi req/s mục tiêu thành số lượt/giây cho từng nhóm (80% request từ khách, 20% từ user).
+// So sánh hai bản (legacy/cached) phải giữ CÙNG số lượt nghiệp vụ/giây, không cùng req/s:
+// đặt GUEST_IT và USER_IT (lượt/giây) để bỏ qua cách đổi từ RPS (chỉ áp dụng cho capacity).
 function rates(rps) {
+  if (PROFILE === 'capacity' && __ENV.GUEST_IT && __ENV.USER_IT) return { guest: Number(__ENV.GUEST_IT), user: Number(__ENV.USER_IT) };
   return { guest: Math.max(1, Math.round((rps * 0.8) / GUEST_REQ)), user: Math.max(1, Math.round((rps * 0.2) / USER_REQ)) };
 }
 
@@ -139,6 +147,18 @@ function me(step) {
   try { return r.json(); } catch (e) { return null; }
 }
 
+// "sessionStorage" của tab hiện tại (mỗi VU một tab; khách: tab mới mỗi lượt, user: tab mới mỗi lần đăng nhập)
+let tabMe = null; // { data, at }
+function resetTab() { tabMe = null; }
+function pageMe(step) {
+  if (ME_MODE === 'legacy') return me(step);
+  const refresh = http.cookieJar().cookiesForURL(BASE).gm_me;
+  if (tabMe && !(refresh && refresh.length) && Date.now() - tabMe.at < 5 * 60 * 1000 && csrfCookie()) return tabMe.data;
+  const data = me(step);
+  tabMe = data ? { data, at: Date.now() } : null;
+  return data;
+}
+
 function csrfCookie() {
   const c = http.cookieJar().cookiesForURL(BASE).csrftoken;
   return c && c.length ? c[0] : null;
@@ -176,19 +196,20 @@ function post(name, path, form) {
 // ---------- Khách duyệt web ----------
 export function guest() {
   http.cookieJar().clear(BASE); // mỗi lượt là một khách mới (như JMeter clearEachIteration)
+  resetTab();
   let slug, token;
 
   group('G01 Trang chủ', () => {
     const r = get('G01 Trang chủ', '/');
     check(r, { 'G01 200': (x) => x.status === 200, 'G01 có tiêu đề': (x) => (x.body || '').includes('Green Grocer') });
-    me('G01');
+    pageMe('G01');
   });
   think();
   group('G02 Danh sách sản phẩm', () => {
     const r = get('G02 Danh sách', '/productPage/');
     check(r, { 'G02 200': (x) => x.status === 200, 'G02 có nút thêm giỏ': (x) => (x.body || '').includes('Thêm vào giỏ') });
     slug = randomSlug(r);
-    me('G02');
+    pageMe('G02');
     token = csrfCookie();
   });
   if (!slug || !token) return; // trang lỗi: bỏ lượt này (đã tính lỗi ở check trên)
@@ -196,13 +217,13 @@ export function guest() {
   group('G03 Chi tiết sản phẩm', () => {
     const r = get('G03 Chi tiết', `/detail/${slug}`);
     check(r, { 'G03 200': (x) => x.status === 200 });
-    me('G03');
+    pageMe('G03');
   });
   think();
   group('G04 Tìm kiếm', () => {
     const r = get('G04 Tìm kiếm', `/search?q=${encodeURIComponent(SEARCH[Math.floor(Math.random() * SEARCH.length)])}`);
     check(r, { 'G04 200': (x) => x.status === 200 });
-    me('G04');
+    pageMe('G04');
   });
   think();
   group('G05 Thêm vào giỏ', () => {
@@ -240,7 +261,8 @@ function login() {
     if (t.session !== undefined) loginSession.add(t.session);
     if (t.merge !== undefined) loginMerge.add(t.merge);
     const home = get('U02 Trang chủ sau đăng nhập', '/');
-    const info = me('U02');
+    resetTab();
+    const info = pageMe('U02');
     ok = check(r, { 'U02 đăng nhập được (302)': (x) => x.status === 302 }) &&
       check(home, { 'U02 trang chủ 200': (x) => x.status === 200 }) &&
       check(info, { 'U02 /api/me/ đã đăng nhập': (x) => !!x && x.authenticated === true && x.username === acc.u });
@@ -258,7 +280,7 @@ export function user() {
     const r = get('U03 Danh sách', '/productPage/');
     check(r, { 'U03 200': (x) => x.status === 200 });
     slug = randomSlug(r);
-    const info = me('U03');
+    const info = pageMe('U03');
     if (!info || !info.authenticated) slug = null; // mất session
     token = csrfCookie();
   });
