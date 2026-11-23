@@ -24,7 +24,7 @@ for r in rows:
     m = r["metric_name"]
     if m == "http_req_duration":
         dur[w].append(float(r["metric_value"]))
-    elif m == "http_req_failed" and r["metric_value"] in ("1", "1.0"):
+    elif m == "http_req_failed" and float(r["metric_value"]) == 1:  # k6 ghi "1.000000"
         fail[w] += 1
     elif m == "vus":
         vus[w] = max(vus[w], int(float(r["metric_value"])))
