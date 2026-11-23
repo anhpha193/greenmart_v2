@@ -4,6 +4,7 @@ import time
 
 from django.shortcuts import render
 
+from greenmart_common.cache import safe_get, safe_set
 from greenmart_common.client import NotFound, ServiceUnavailable
 
 from .auth import AnonymousUser, SessionUser
@@ -28,6 +29,11 @@ class RemoteUserMiddleware:
         data = request.session.get("user")
         if not data:
             return AnonymousUser()
+        # Dấu "vừa kiểm tra" nằm ở Valkey (60 giây), không ghi vào session: trước đây cứ 60 giây mỗi user đăng nhập
+        # lại ghi session (cached_db = một lệnh ghi MySQL) chỉ để cập nhật thời điểm kiểm tra.
+        mark = f"uchk:{data['id']}"
+        if safe_get(mark):
+            return SessionUser(data)
         if time.time() - data.get("checked_at", 0) > REVALIDATE_SECONDS:
             try:
                 fresh = users.get(f"/api/users/{data['id']}/")
@@ -40,9 +46,11 @@ class RemoteUserMiddleware:
                 if not fresh["is_active"]:
                     request.session.flush()
                     return AnonymousUser()
-                data.update(username=fresh["username"], email=fresh["email"], is_staff=fresh["is_staff"],
-                            is_superuser=fresh["is_superuser"], checked_at=time.time())
-                request.session["user"] = data
+                changed = {k: fresh[k] for k in ("username", "email", "is_staff", "is_superuser") if data.get(k) != fresh[k]}
+                if changed:  # chỉ ghi session khi thông tin user thật sự đổi
+                    data.update(changed, checked_at=time.time())
+                    request.session["user"] = data
+                safe_set(mark, 1, REVALIDATE_SECONDS)
         return SessionUser(data)
 
 
@@ -74,7 +82,6 @@ class MeRefreshMiddleware:
 
     def __call__(self, request):
         key_before = request.COOKIES.get(settings.SESSION_COOKIE_NAME)
-        count_before = (request.session.get("cart_count") or [None])[0]
         response = self.get_response(request)
         if request.path == "/api/me/":
             if ME_REFRESH_COOKIE in request.COOKIES:
@@ -85,7 +92,7 @@ class MeRefreshMiddleware:
         via_js = request.headers.get("X-Requested-With") == "XMLHttpRequest"
         changed = (
             request.session.session_key != key_before
-            or (not via_js and (request.session.get("cart_count") or [None])[0] != count_before)
+            or (not via_js and getattr(request, "_gm_cart_changed", False))
             or bool(storage is not None and getattr(storage, "_queued_messages", None))
         )
         if changed:

@@ -5,12 +5,20 @@
 # ---------------------------------------------------------------------------
 
 locals {
+  # max_conn: ngân sách kết nối MySQL của từng service (MAX_USER_CONNECTIONS). Tổng 132 < max_connections 150,
+  # chừa 18 cho tài khoản quản trị (rds-init, data-migrator, thao tác tay). Service vượt ngân sách chỉ tự nó bị lỗi
+  # 1203, không làm cả RDS hết kết nối (sự cố ở bản 1.2.5). Tính theo số kết nối tối đa có thể có:
+  #   order     4 pod x 2 worker x 4 thread = 32 (giữ kết nối 60s) + order-worker + Job migrate  -> 40
+  #   user      6 pod x 2 x 2 thread = 24 + Job                                                  -> 30
+  #   catalog   4 pod x 2 x 2 thread = 16 + order-worker gọi qua HTTP (không tính) + Job         -> 20
+  #   promotion 3 pod x 2 x 2 thread = 12                                                         -> 12
+  #   web       web + web-auth: từ 1.2.6 chỉ chạm MySQL khi tạo/đổi session (đăng nhập, khách mới) -> 30
   databases = {
-    user      = { db = "user_db", user = "user_svc", env = "USER_DB_PASSWORD" }
-    catalog   = { db = "catalog_db", user = "catalog_svc", env = "CATALOG_DB_PASSWORD" }
-    order     = { db = "order_db", user = "order_svc", env = "ORDER_DB_PASSWORD" }
-    promotion = { db = "promotion_db", user = "promotion_svc", env = "PROMOTION_DB_PASSWORD" }
-    web       = { db = "web_db", user = "web_svc", env = "WEB_DB_PASSWORD" }
+    user      = { db = "user_db", user = "user_svc", env = "USER_DB_PASSWORD", max_conn = 30 }
+    catalog   = { db = "catalog_db", user = "catalog_svc", env = "CATALOG_DB_PASSWORD", max_conn = 20 }
+    order     = { db = "order_db", user = "order_svc", env = "ORDER_DB_PASSWORD", max_conn = 40 }
+    promotion = { db = "promotion_db", user = "promotion_svc", env = "PROMOTION_DB_PASSWORD", max_conn = 12 }
+    web       = { db = "web_db", user = "web_svc", env = "WEB_DB_PASSWORD", max_conn = 30 }
   }
 }
 
@@ -147,7 +155,7 @@ resource "kubernetes_job_v1" "rds_init" {
             %{for k, v in local.databases~}
             CREATE DATABASE IF NOT EXISTS ${v.db} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             CREATE USER IF NOT EXISTS '${v.user}'@'%' IDENTIFIED WITH mysql_native_password BY '${"$"}${v.env}';
-            ALTER USER '${v.user}'@'%' IDENTIFIED BY '${"$"}${v.env}';
+            ALTER USER '${v.user}'@'%' IDENTIFIED BY '${"$"}${v.env}' WITH MAX_USER_CONNECTIONS ${v.max_conn};
             GRANT ALL PRIVILEGES ON ${v.db}.* TO '${v.user}'@'%';
             %{endfor~}
             FLUSH PRIVILEGES;

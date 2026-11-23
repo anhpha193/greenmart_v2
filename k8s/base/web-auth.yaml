@@ -71,7 +71,7 @@ spec:
         # web chủ yếu CHỜ (Valkey, order/user-service), ít tính toán: 8 thread/worker thay vì 4.
         # 2 worker x 8 thread = 16 request cùng lúc mỗi pod; tối đa 8 pod = 128 (trước là 64, là trần ở khoảng 440 req/s).
         - name: GUNICORN_THREADS
-          value: '8'
+          value: '4'   # chỉ phục vụ đăng nhập/đăng ký; 3 pod x 2 x 4 = 24 kết nối tối đa (ngân sách web_svc 30)
         - name: ALLOWED_HOSTS
           valueFrom:
             configMapKeyRef:

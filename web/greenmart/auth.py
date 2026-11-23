@@ -9,6 +9,7 @@ from django.shortcuts import redirect
 
 from greenmart_common.client import ServiceError
 
+from . import cartcount
 from .services import orders
 
 log = logging.getLogger(__name__)
@@ -54,7 +55,8 @@ def login_user(request, user):
         "checked_at": time.time(),
     }
     request.user = SessionUser(request.session["user"])
-    request.session.pop("cart_count", None)  # giỏ khách vãng lai sẽ được gộp: đếm lại ở trang kế tiếp
+    # Giỏ khách vãng lai sẽ được gộp vào giỏ user: xóa số món đã lưu của cả hai để lần sau đếm lại.
+    cartcount.forget(cartcount.guest_key(guest_token), cartcount.user_key(user["id"]))
     t1 = time.perf_counter()
     if guest_token:
         try:

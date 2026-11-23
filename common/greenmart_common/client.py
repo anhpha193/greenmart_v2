@@ -1,5 +1,7 @@
 """HTTP client gọi service khác trong mạng nội bộ."""
 import requests
+
+from . import fastjson
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -45,7 +47,7 @@ class ServiceClient:
         except requests.RequestException as exc:
             raise ServiceUnavailable(503, {"detail": str(exc)}, self.name) from exc
         try:
-            data = resp.json() if resp.content else None
+            data = fastjson.loads(resp.content) if resp.content else None
         except ValueError:
             data = {"detail": resp.text[:200]}
         if resp.status_code == 404:

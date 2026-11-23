@@ -1,7 +1,7 @@
 import time
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import F, Sum
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -173,16 +173,26 @@ class CartItemView(APIView):
         except (BadOwner, TypeError, ValueError):
             return Response({"error": "invalid_request"}, status=400)
 
-        with transaction.atomic():
-            order = get_or_create_cart(cid, token)
-            item, _ = OrderItem.objects.get_or_create(order=order, product_id=product_id, defaults={"quantity": 0})
-            OrderItem.objects.filter(pk=item.pk).update(quantity=F("quantity") + delta)
-            item.refresh_from_db()
-            removed = item.quantity <= 0
-            if removed:
-                item.delete()
-            touch_cart(cid, token)
-        count = order.items.aggregate(s=Sum("quantity"))["s"] or 0
+        # Ít query nhất có thể (trước: SELECT giỏ, SELECT/INSERT dòng, UPDATE, SELECT lại, [DELETE], SUM):
+        #   món đã có: 1 UPDATE nguyên tử (quantity = quantity + delta), không đọc trước
+        #   món mới  : UPDATE không trúng dòng nào -> INSERT
+        #   chỉ khi delta < 0 mới cần xóa dòng có quantity <= 0
+        # Hai request cùng lúc thêm CÙNG món mới (bấm 2 lần): một bên gặp lỗi khóa duy nhất hoặc deadlock (MySQL
+        # REPEATABLE READ) -> chạy lại cả transaction; lần sau UPDATE thấy dòng đã có và cộng dồn, không mất số lượng.
+        for attempt in range(3):
+            try:
+                with transaction.atomic():
+                    order = get_or_create_cart(cid, token)
+                    rows = OrderItem.objects.filter(order=order, product_id=product_id)
+                    if not rows.update(quantity=F("quantity") + delta) and delta > 0:
+                        OrderItem.objects.create(order=order, product_id=product_id, quantity=delta)
+                    removed = bool(delta <= 0 and rows.filter(quantity__lte=0).delete()[0])
+                    touch_cart(cid, token)
+                    count = order.items.aggregate(s=Sum("quantity"))["s"] or 0
+                break
+            except (IntegrityError, OperationalError) as exc:
+                if attempt == 2 or (isinstance(exc, OperationalError) and exc.args[:1] not in ((1213,), (1205,))):
+                    raise
         return Response({"order_id": order.id, "removed": removed, "get_cart_items": count})
 
 

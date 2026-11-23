@@ -65,6 +65,9 @@ spec:
               key: CATALOG_DB_PASSWORD
         - name: RUN_MIGRATE
           value: '0'
+        # Ngân sách kết nối MySQL: đọc từ Valkey là chính; 4 pod x 2 x 2 = 16 kết nối tối đa (ngân sách catalog_svc 20)
+        - name: GUNICORN_THREADS
+          value: '2'
         - name: MEDIA_ROOT
           value: /media
         readinessProbe:

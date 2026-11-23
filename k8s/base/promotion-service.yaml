@@ -65,6 +65,9 @@ spec:
               key: PROMOTION_DB_PASSWORD
         - name: RUN_MIGRATE
           value: '0'
+        # Ngân sách kết nối MySQL: đọc từ Valkey là chính; 3 pod x 2 x 2 = 12 kết nối tối đa (ngân sách promotion_svc 12)
+        - name: GUNICORN_THREADS
+          value: '2'
         readinessProbe:
           httpGet:
             path: /health/

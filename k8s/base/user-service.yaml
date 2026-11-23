@@ -65,6 +65,9 @@ spec:
               key: USER_DB_PASSWORD
         - name: RUN_MIGRATE
           value: '0'
+        # Ngân sách kết nối MySQL: 6 pod x 2 worker x 2 thread = 24 kết nối MySQL tối đa (ngân sách user_svc 30)
+        - name: GUNICORN_THREADS
+          value: '2'
         - name: EMAIL_HOST_PASSWORD
           valueFrom:
             secretKeyRef:

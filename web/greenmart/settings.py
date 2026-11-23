@@ -58,7 +58,17 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Có Valkey (REDIS_URL): session đọc từ cache, chỉ ghi xuống web_db khi session đổi (cached_db),
 # nên mỗi request không còn một câu SELECT vào bảng session. Valkey mất dữ liệu thì session vẫn còn trong DB.
 CACHES = cache_settings("web")
-SESSION_ENGINE = "django.contrib.sessions.backends.cached_db" if redis_url() else "django.contrib.sessions.backends.db"
+# WEB_SESSION_BACKEND (khi có Valkey):
+#   cached_db (mặc định): đọc từ Valkey, mỗi lần tạo/đổi session vẫn ghi MySQL web_db (bền, nhưng mỗi khách mới = 1 INSERT)
+#   cache   (overlay EKS từ 1.2.6): chỉ Valkey -> không ghi MySQL. Đánh đổi: Valkey khởi động lại/thay node thì mọi
+#           người phải đăng nhập lại và giỏ của khách chưa đăng nhập không còn gắn với trình duyệt (giỏ user không mất).
+_SESSION_BACKEND = env("WEB_SESSION_BACKEND", "cached_db")
+if not redis_url():
+    SESSION_ENGINE = "django.contrib.sessions.backends.db"
+elif _SESSION_BACKEND == "cache":
+    SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+else:
+    SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

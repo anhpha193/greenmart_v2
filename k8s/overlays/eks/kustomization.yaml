@@ -61,6 +61,8 @@ patches:
         WEB_ALLOWED_HOSTS: "*"            # chưa có domain cố định; siết lại khi có domain
         ENABLE_PROMETHEUS: "1"
         PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-multiproc
+        WEB_SESSION_BACKEND: cache        # session chỉ trên Valkey, không ghi MySQL (xem web/greenmart/settings.py)
+        GUNICORN_ACCESS_LOG: ""           # tắt log từng request của gunicorn (đỡ CPU); lỗi vẫn ghi
         DB_CONN_MAX_AGE: "0"              # RDS micro chỉ 60-150 kết nối; giữ kết nối theo thread sẽ vượt giới hạn khi HPA scale
 
   # --- Mọi service đọc thêm ConfigMap greenmart-infra (Terraform tạo): REDIS_URL, MEDIA_BUCKET, ORDER_EVENTS_QUEUE_URL... ---

@@ -89,7 +89,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_PERMISSION_CLASSES": ["greenmart_common.internal_auth.IsInternalService"],
-    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_RENDERER_CLASSES": ["greenmart_common.fastjson.FastJSONRenderer"],  # orjson: nhanh hơn json chuẩn
 }
 
 JAZZMIN_SETTINGS = {"site_title": "GreenMart – Users", "site_header": "GreenMart Users", "welcome_sign": "GreenMart – quản trị tài khoản"}

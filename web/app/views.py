@@ -10,6 +10,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST  # noqa: F401  (giữ để dễ bật khi cần)
 
+from greenmart import cartcount
 from greenmart.auth import login_required, login_user, logout_user
 from greenmart.services import catalog, catalog_read, orders, promotions, users
 from greenmart.viewmodel import to_view
@@ -32,32 +33,19 @@ def cart_summary(request):
     return orders.post("/api/carts/current/", json=cart_owner(request))
 
 
-# Số món trong giỏ hiện ở góc mọi trang. Trước đây MỖI trang gọi order-service (khách vãng lai còn bị tạo
-# hẳn một giỏ trống + session trong MySQL chỉ để hiện số 0). Giờ: khách chưa có session = chưa có giỏ = 0;
-# còn lại nhớ số này trong session, cập nhật ngay khi thêm/bớt/đặt hàng, và hỏi lại order-service sau 60 giây
-# (phòng khi giỏ đổi ở thiết bị khác).
-CART_COUNT_KEY = "cart_count"
-CART_COUNT_TTL = 60
-
-
+# Số món trong giỏ: lưu trong Valkey (greenmart/cartcount.py), không còn trong session -> thêm giỏ không ghi
+# session xuống MySQL. Khách chưa có session = chưa có giỏ = 0. Quá 60 giây thì hỏi lại order-service.
 def remember_cart_count(request, count):
-    count = int(count or 0)
-    saved = request.session.get(CART_COUNT_KEY)
-    # session dạng cached_db: mỗi lần sửa session là một lệnh ghi web_db. Số món không đổi và bản lưu còn mới
-    # (chưa quá nửa TTL) thì không ghi lại.
-    if saved and saved[0] == count and time.time() - saved[1] < CART_COUNT_TTL / 2:
-        return
-    request.session[CART_COUNT_KEY] = [count, time.time()]
+    cartcount.remember(request, count)
 
 
 def cart_count(request):
-    saved = request.session.get(CART_COUNT_KEY)
-    if saved and time.time() - saved[1] < CART_COUNT_TTL:
-        return saved[0]
     if not request.user.is_authenticated and not request.session.session_key:
         return 0
-    count = cart_summary(request)["get_cart_items"]
-    remember_cart_count(request, count)
+    count = cartcount.get_fresh(request)
+    if count is None:
+        count = cart_summary(request)["get_cart_items"]
+        remember_cart_count(request, count)
     return count
 
 

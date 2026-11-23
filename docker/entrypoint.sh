@@ -37,7 +37,11 @@ fi
 #   WEB_CONCURRENCY   số worker (tiến trình), mặc định 2
 #   GUNICORN_THREADS  số thread mỗi worker, mặc định 4  => mỗi pod xử lý 8 request cùng lúc
 #   GUNICORN_TIMEOUT  giây, mặc định 60
+#   GUNICORN_ACCESS_LOG  không đặt = ghi log từng request (như cũ); đặt rỗng = tắt (overlay EKS tắt:
+#                        ở ~1.000 req/s, ghi log từng request tốn CPU cả trong pod lẫn container runtime trên node;
+#                        số request/độ trễ đã có ở ALB, nginx và Prometheus)
+ACCESS_LOG="${GUNICORN_ACCESS_LOG-1}"
 exec gunicorn "${WSGI_MODULE}.wsgi:application" --bind 0.0.0.0:8000 \
   --workers "${WEB_CONCURRENCY:-2}" --worker-class gthread --threads "${GUNICORN_THREADS:-4}" \
   --timeout "${GUNICORN_TIMEOUT:-60}" --keep-alive 5 \
-  --access-logfile - --error-logfile -
+  ${ACCESS_LOG:+--access-logfile -} --error-logfile -
