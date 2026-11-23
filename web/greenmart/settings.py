@@ -90,6 +90,12 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 # Tắt (WEB_CLIENT_ME_CACHE=0) để quay về gọi /api/me/ ở mọi trang nếu thấy trạng thái hiển thị bị cũ.
 CLIENT_ME_CACHE = env_bool("WEB_CLIENT_ME_CACHE", True)
 
+# 1.2.8 - mỗi nhóm thay đổi một cờ để A/B và quay lại nhanh (đổi ConfigMap rồi restart pod, không cần build image):
+#   WEB_LEAN_CART        số món giỏ ghi bằng 1 lệnh SET ... GET; thêm giỏ dùng luôn số món order-service trả về
+#   WEB_CART_DIRECT_READ trang giỏ/thanh toán/đếm giỏ đọc thẳng Cart Read Model trong Valkey, trượt mới gọi order-service
+WEB_LEAN_CART = env_bool("WEB_LEAN_CART", True)
+WEB_CART_DIRECT_READ = env_bool("WEB_CART_DIRECT_READ", True)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

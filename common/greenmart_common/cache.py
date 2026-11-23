@@ -10,6 +10,7 @@ Dùng trong settings.py:
     CACHES = cache_settings("catalog")
 """
 import logging
+import time
 
 from django.core.cache import cache
 
@@ -53,15 +54,31 @@ def safe_set(key, value, timeout):
         log.warning("cache set lỗi: %s", key, exc_info=True)
 
 
+# 1.2.8: nhớ số phiên bản trong tiến trình VERSION_MEMO_SECONDS giây. Mỗi lần đọc qua cached() bớt một round-trip
+# Valkey (trước: GET phiên bản + GET dữ liệu). Đánh đổi: sau khi một nhóm đổi phiên bản (vd. sửa sản phẩm), tiến trình
+# KHÁC thấy dữ liệu mới chậm thêm tối đa ngần ấy giây (tiến trình tự bump thì thấy ngay). 0 = tắt.
+VERSION_MEMO_SECONDS = float(env("CACHE_VERSION_MEMO_SECONDS", "1"))
+_memo = {}
+
+
 def get_version(name):
     """Số phiên bản của một nhóm key. Tăng số này là vô hiệu toàn bộ key của nhóm cùng lúc."""
+    if VERSION_MEMO_SECONDS > 0:
+        hit = _memo.get(name)
+        now = time.monotonic()
+        if hit and hit[1] > now:
+            return hit[0]
     try:
-        return cache.get_or_set(f"v:{name}", 1, None)
+        value = cache.get_or_set(f"v:{name}", 1, None)
     except Exception:  # noqa: BLE001
         return None
+    if VERSION_MEMO_SECONDS > 0 and value is not None:
+        _memo[name] = (value, time.monotonic() + VERSION_MEMO_SECONDS)
+    return value
 
 
 def bump_version(name):
+    _memo.pop(name, None)
     try:
         cache.incr(f"v:{name}")
     except ValueError:  # key chưa có

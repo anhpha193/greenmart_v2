@@ -10,6 +10,14 @@ class Order(models.Model):
     date_order = models.DateTimeField(auto_now_add=True)
     complete = models.BooleanField(default=False, null=True, blank=False)
     transaction_id = models.CharField(max_length=100, blank=True, null=True)
+    # 1.2.8: tăng 1 ở mỗi lần ghi giỏ (thêm/bớt món, khuyến mãi, gộp, chốt đơn) - nhãn của Cart Read Model
+    # (greenmart_common/cartmodel.py). Chỉ tăng bằng UPDATE ... version = version + 1, KHÔNG ghi bằng save() toàn bộ
+    # instance (instance cũ sẽ ghi đè version mới hơn).
+    # db_default: cột có DEFAULT 0 ngay trong MySQL, nên pod bản cũ (không biết cột này) vẫn INSERT được lúc rollout.
+    # BigIntegerField (không Positive): Positive thêm CHECK constraint -> MySQL phải dựng lại cả bảng khi thêm cột.
+    version = models.BigIntegerField(default=0, db_default=0)
+    # Lần ghi giỏ gần nhất: CronJob dọn giỏ khách bỏ lại dựa vào cột này (NULL = giỏ từ trước 1.2.8).
+    updated_at = models.DateTimeField(null=True, blank=True)
 
     # Snapshot khuyến mãi tại thời điểm áp mã (promotion thuộc promotion-service).
     promotion_id = models.BigIntegerField(null=True, blank=True)

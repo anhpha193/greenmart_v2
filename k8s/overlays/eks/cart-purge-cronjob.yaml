@@ -1,0 +1,82 @@
+# cart-purge (1.2.8): dọn giỏ của khách chưa đăng nhập bị bỏ lại (orders/management/commands/purge_guest_carts.py).
+# Mỗi ngày 02:30 giờ Việt Nam (19:30 UTC), lúc ít người mua. Cùng image với order-service, chạy lệnh thay cho gunicorn.
+#   CART_PURGE_DAYS    (greenmart-config) chỉ xóa giỏ không hoạt động quá ngần ấy ngày, mặc định 14 = hạn session khách
+#   CART_PURGE_EXECUTE (greenmart-config) rỗng = dry-run, chỉ ghi số giỏ đủ điều kiện ra log; "1" = xóa thật
+# Xóa theo lô 500 giỏ, nghỉ 0,5 giây giữa các lô, tối đa 400 lô (200.000 giỏ) mỗi lần chạy; mỗi lô một transaction ngắn
+# chỉ khóa đúng các dòng định xóa (SKIP LOCKED: giỏ đang được ghi thì bỏ qua). Không bao giờ đụng giỏ của user/đơn hàng.
+# Chạy tay một lần (vd. xem dry-run):  kubectl -n greenmart create job --from=cronjob/cart-purge cart-purge-manual
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cart-purge
+  labels:
+    app.kubernetes.io/name: cart-purge
+    app.kubernetes.io/part-of: greenmart
+spec:
+  schedule: "30 19 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cart-purge
+            app.kubernetes.io/part-of: greenmart
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+          - name: purge
+            image: docker.io/noobcoder1219/order-service   # overlay đổi sang image ECR (cùng tên với order-service)
+            imagePullPolicy: IfNotPresent
+            args:
+            - sh
+            - -c
+            - exec python manage.py purge_guest_carts --days "${CART_PURGE_DAYS:-14}" --batch 500 --sleep 0.5 --max-batches 400 ${CART_PURGE_EXECUTE:+--execute}
+            envFrom:
+            - configMapRef:
+                name: greenmart-config
+            - configMapRef:
+                name: greenmart-infra
+            env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: greenmart-secrets
+                  key: SECRET_KEY
+            - name: INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: greenmart-secrets
+                  key: INTERNAL_API_TOKEN
+            - name: DB_NAME
+              value: order_db
+            - name: DB_USER
+              value: order_svc
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: greenmart-secrets
+                  key: ORDER_DB_PASSWORD
+            - name: RUN_MIGRATE
+              value: '0'
+            - name: ENABLE_PROMETHEUS
+              value: '0'
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+              limits:
+                memory: 256Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL

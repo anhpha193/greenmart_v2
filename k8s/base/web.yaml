@@ -93,7 +93,9 @@ spec:
           failureThreshold: 3
         resources:
           requests:
-            cpu: 100m
+            # 1.2.8: theo số đo ở 230 lượt/s (1.2.7): ~0,45 core/pod web. Request sát thực tế để scheduler rải pod theo
+            # tải thật và HPA scale theo % thật; 8 pod x 300m = 2,4 core vẫn vừa 4 node cùng các service khác.
+            cpu: 300m
             memory: 192Mi
           # Không giới hạn CPU: giới hạn 1 core làm pod bị bóp (throttle) theo từng 100ms ngay cả khi node còn dư,
           # gây các đợt p95 tăng vọt. requests.cpu vẫn giữ để lịch pod và để HPA tính % sử dụng.

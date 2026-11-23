@@ -16,6 +16,7 @@ resources:
   - ingress-alb.yaml
   - networkpolicy-monitoring.yaml
   - order-worker.yaml
+  - cart-purge-cronjob.yaml
 
 # Image ECR (ĐỔI account id/region/tag). Khớp theo tên image sau khi base đã áp dụng `images:`.
 images:
@@ -64,6 +65,14 @@ patches:
         WEB_SESSION_BACKEND: cache        # session chỉ trên Valkey, không ghi MySQL (xem web/greenmart/settings.py)
         GUNICORN_ACCESS_LOG: ""           # tắt log từng request của gunicorn (đỡ CPU); lỗi vẫn ghi
         DB_CONN_MAX_AGE: "0"              # RDS micro chỉ 60-150 kết nối; giữ kết nối theo thread sẽ vượt giới hạn khi HPA scale
+        # --- 1.2.8: mỗi nhóm thay đổi một cờ để A/B (sửa ở đây hoặc kubectl edit cm, rồi rollout restart) ---
+        ORDER_CART_WRITE_MODE: upsert     # upsert (thêm món không mở transaction) | txn (như 1.2.7)
+        WEB_LEAN_CART: "1"                # số món giỏ: 1 lệnh SET...GET; thêm giỏ dùng số món order-service trả về
+        WEB_CART_DIRECT_READ: "1"         # web đọc thẳng Cart Read Model trong Valkey, trượt mới gọi order-service
+        CACHE_VERSION_MEMO_SECONDS: "1"   # nhớ số phiên bản cache 1 giây trong tiến trình (0 = tắt)
+        DB_CONN_HEALTH_CHECKS: "1"        # ping MySQL đầu mỗi request (order-service giữ kết nối 60s). Chỉ đặt "0" khi A/B đạt
+        CART_PURGE_DAYS: "14"             # CronJob cart-purge: xóa giỏ khách không hoạt động quá ngần ấy ngày
+        CART_PURGE_EXECUTE: ""            # rỗng = dry-run (chỉ đếm). Đặt "1" sau khi đã xem log dry-run và duyệt thời hạn
 
   # --- Mọi service đọc thêm ConfigMap greenmart-infra (Terraform tạo): REDIS_URL, MEDIA_BUCKET, ORDER_EVENTS_QUEUE_URL... ---
   - target: { kind: Deployment, labelSelector: "app.kubernetes.io/part-of=greenmart,app.kubernetes.io/name in (web,web-auth,user-service,catalog-service,order-service,promotion-service)" }

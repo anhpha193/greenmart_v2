@@ -2,6 +2,7 @@
 URL, tên route và thông báo hiển thị giữ nguyên như bản monolith."""
 import time
 
+from django.conf import settings
 from django.contrib import messages
 from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
@@ -14,6 +15,7 @@ from greenmart import cartcount
 from greenmart.auth import login_required, login_user, logout_user
 from greenmart.services import catalog, catalog_read, orders, promotions, users
 from greenmart.viewmodel import to_view
+from greenmart_common import cartmodel, fastjson
 from greenmart_common.cache import bump_version, cached
 from greenmart_common.client import NotFound, ServiceError
 
@@ -44,13 +46,36 @@ def cart_count(request):
         return 0
     count = cartcount.get_fresh(request)
     if count is None:
-        count = cart_summary(request)["get_cart_items"]
+        data = read_cart_model(cart_owner(request))
+        count = (data if data is not None else cart_summary(request))["get_cart_items"]
         remember_cart_count(request, count)
     return count
 
 
+def _is_stale_item(product):  # giống orders.cart.is_stale_item: sản phẩm mất khỏi catalog hoặc bị ẩn
+    return product is None or product.get("status") == "hidden"
+
+
+def read_cart_model(owner, prune_hidden=False):
+    """1.2.8 (WEB_CART_DIRECT_READ): đọc thẳng Cart Read Model do order-service ghi trong Valkey (1 round-trip),
+    không gọi HTTP sang order-service. Trượt/tombstone/Valkey lỗi -> None (nơi gọi hỏi order-service như cũ).
+    Cần loại sản phẩm bị ẩn (trang giỏ) mà giỏ có món như vậy -> None để order-service xóa và dựng lại."""
+    if not settings.WEB_CART_DIRECT_READ:
+        return None
+    hit = cartmodel.get(cartmodel.owner_key(owner.get("customer_id"), owner.get("guest_token")))
+    if not hit or hit[2] is None:
+        return None
+    data = fastjson.loads(hit[2])
+    if prune_hidden and any(_is_stale_item(i["product"]) for i in data["items"]):
+        return None
+    return data
+
+
 def get_cart(request, prune_hidden=False):
-    data = orders.post("/api/carts/current/", json={**cart_owner(request), "detail": True, "prune_hidden": prune_hidden})
+    owner = cart_owner(request)
+    data = read_cart_model(owner, prune_hidden)
+    if data is None:
+        data = orders.post("/api/carts/current/", json={**owner, "detail": True, "prune_hidden": prune_hidden})
     remember_cart_count(request, data.get("get_cart_items"))
     return to_view(data)
 
@@ -133,24 +158,26 @@ def _change_quantity(request, slug, delta):
     product_ = get_product_or_404(slug)
     res = orders.post("/api/carts/current/items/", json={**cart_owner(request), "product_id": product_["id"], "delta": delta})
     remember_cart_count(request, res.get("get_cart_items"))
-    return product_
+    return product_, res
 
 
 def _wants_json(request):
     return request.headers.get("X-Requested-With") == "XMLHttpRequest"
 
 
-def _added_response(request, product_):
+def _added_response(request, product_, res):
     text = f"✅ {product_['name']} đã được thêm vào giỏ hàng!"
     if _wants_json(request):
-        return JsonResponse({"ok": True, "cart_count": cart_count(request), "message": text})
+        # 1.2.8 (WEB_LEAN_CART): order-service đã trả số món mới -> không hỏi lại Valkey/order-service
+        count = res.get("get_cart_items") if settings.WEB_LEAN_CART else cart_count(request)
+        return JsonResponse({"ok": True, "cart_count": count, "message": text})
     messages.success(request, text)
     return redirect_back(request)
 
 
 def add_to_cart(request, slug):
-    product_ = _change_quantity(request, slug, 1)
-    return _added_response(request, product_)
+    product_, res = _change_quantity(request, slug, 1)
+    return _added_response(request, product_, res)
 
 
 def add_to_cart_detail(request, slug):
@@ -164,7 +191,7 @@ def add_to_cart_detail(request, slug):
         return redirect_back(request)
     res = orders.post("/api/carts/current/items/", json={**cart_owner(request), "product_id": product_["id"], "delta": quantity})
     remember_cart_count(request, res.get("get_cart_items"))
-    return _added_response(request, product_)
+    return _added_response(request, product_, res)
 
 
 def arrow_up(request, slug):

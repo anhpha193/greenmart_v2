@@ -1,5 +1,7 @@
-# Cần metrics-server trong cluster. Tổng maxReplicas tính cho 4 node c7i-flex.large (8 vCPU): request CPU mỗi pod
-# nhỏ (50-100m) nên lịch được hết; CPU thật mới là giới hạn, theo dõi trên Grafana (dashboard GreenMart overview).
+# Cần metrics-server trong cluster. Tổng maxReplicas tính cho 4 node c7i-flex.large (8 vCPU, ~7,7 core cho pod).
+# 1.2.8: request CPU theo số đo thật (web 300m, order 400m, còn lại 50-100m). Lúc tất cả ở maxReplicas tổng request
+# ~5,9 core (gồm hệ thống ~0,4) < 7,7: còn chỗ cho rolling update (maxSurge) mà không có pod Pending.
+# user-service 6 -> 3: từ 1.2.7 chỉ còn đăng nhập (~0,1-0,5 core); 6 pod chỉ tốn RAM và chỗ trên node.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -105,7 +107,7 @@ spec:
     kind: Deployment
     name: user-service
   minReplicas: 2
-  maxReplicas: 6
+  maxReplicas: 3
   metrics:
   - type: Resource
     resource:

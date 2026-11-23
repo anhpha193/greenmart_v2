@@ -25,6 +25,14 @@ def loads(data):
     return orjson.loads(data) if orjson else json.loads(data)
 
 
+def dumps(data):
+    """dict -> bytes JSON, cùng định dạng với FastJSONRenderer (read model giỏ hàng lưu sẵn bytes này)."""
+    if orjson:
+        return orjson.dumps(data, default=_default, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_UTC_Z)
+    from rest_framework.utils.encoders import JSONEncoder  # giống JSONRenderer của DRF (datetime có "Z")
+    return json.dumps(data, cls=JSONEncoder, ensure_ascii=False, separators=(",", ":")).encode()
+
+
 if orjson:
     class FastJSONRenderer(BaseRenderer):
         media_type = "application/json"

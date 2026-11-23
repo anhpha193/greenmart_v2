@@ -4,7 +4,8 @@
 // Hai nhóm người dùng (80% khách, 20% đăng nhập):
 //   guest: trang chủ -> danh sách -> chi tiết -> tìm kiếm -> thêm vào giỏ -> giỏ hàng (mỗi lượt là khách mới)
 //   user : đăng nhập 1 lần, rồi mỗi lượt: danh sách -> thêm vào giỏ -> giỏ hàng -> thanh toán -> hồ sơ -> (đặt hàng);
-//          sau SESSION_ITERS lượt (mặc định 10) thì đăng xuất và đăng nhập lại
+//          sau SESSION_ITERS lượt (mặc định 50 từ 1.2.7; trước đó 10) thì đăng xuất và đăng nhập lại;
+//          session mất hiệu lực giữa chừng (server không còn nhận) thì đăng nhập lại ở lượt sau
 //
 // PROFILE:
 //   smoke     30 giây, 3 người: kiểm tra kịch bản, phải 0% lỗi
@@ -44,15 +45,30 @@ if (!['legacy', 'cached'].includes(ME_MODE)) throw new Error('ME_MODE phải là
 const GUEST_REQ = ME_MODE === 'cached' ? 7 : 10;
 // User đăng nhập 1 lần rồi giữ session SESSION_ITERS lượt (như người dùng thật), nên mỗi lượt user trung bình
 // khoảng 5-6 request (thêm đăng nhập/đăng xuất ở lượt đầu/cuối của phiên).
-const SESSION_ITERS = Number(__ENV.SESSION_ITERS || 10);
+// 1.2.7: mặc định 50 (gần người dùng thật hơn: một lần đăng nhập cho cả buổi mua sắm). Bài so sánh với bản cũ
+// (baseline, cùng workload với 1.2.6) chạy -e SESSION_ITERS=10. Số lượt/giây không phụ thuộc biến này.
+const SESSION_ITERS = Number(__ENV.SESSION_ITERS || 50);
 const USER_REQ = (DO_CHECKOUT ? 7 : 6) - (ME_MODE === 'cached' ? 1 : 0);
 // Đổi req/s mục tiêu thành số lượt/giây cho từng nhóm (80% request từ khách, 20% từ user).
 // So sánh hai bản (legacy/cached) phải giữ CÙNG số lượt nghiệp vụ/giây, không cùng req/s:
 // đặt GUEST_IT và USER_IT (lượt/giây) để bỏ qua cách đổi từ RPS (chỉ áp dụng cho capacity).
 function rates(rps) {
+  if (PROFILE === 'capacity' && __ENV.IT) return splitIterations(Number(__ENV.IT));
   if (PROFILE === 'capacity' && __ENV.GUEST_IT && __ENV.USER_IT) return { guest: Number(__ENV.GUEST_IT), user: Number(__ENV.USER_IT) };
   return { guest: Math.max(1, Math.round((rps * 0.8) / GUEST_REQ)), user: Math.max(1, Math.round((rps * 0.2) / USER_REQ)) };
 }
+// Tổng lượt mua sắm/giây -> khách/user, CÙNG tỷ lệ với rates() (80% request từ khách, 20% từ user):
+// ME_MODE=cached: khách 7 req/lượt, user 5 -> 74% lượt là khách (vd. 230 = 170 + 60, như các bài 1.2.7).
+function splitIterations(total) {
+  const g = 0.8 / GUEST_REQ, u = 0.2 / USER_REQ;
+  const guest = Math.round((total * g) / (g + u));
+  return { guest, user: Math.max(1, total - guest) };
+}
+// capacity: -e IT=300 (tổng lượt/giây) hoặc GUEST_IT/USER_IT; -e HOLD=15m cho bài nghiệm thu, 60m cho soak.
+const HOLD = __ENV.HOLD || '4m';
+const STEPS = (__ENV.STEPS || '230,250,270,300').split(',').map(Number);
+const STEP_HOLD = __ENV.STEP_HOLD || '2m';
+const GUEST_MAX_VUS = Number(__ENV.GUEST_MAX_VUS || 1200);
 
 const users = new SharedArray('users', () => {
   const lines = open(__ENV.USERS_CSV || '../jmeter/users.csv').split(/\r?\n/).slice(1);
@@ -61,10 +77,20 @@ const users = new SharedArray('users', () => {
 
 // User: số VU CỐ ĐỊNH (tạo sẵn, đăng nhập một lần). Nếu để k6 tự thêm VU khi server chậm, mỗi VU mới đều phải
 // đăng nhập -> "cơn bão đăng nhập" giả tạo làm sập phép đo. Hết VU rảnh thì k6 bỏ lượt (dropped_iterations).
-const USER_VUS = Number(__ENV.USER_VUS || 150);
+// 1.2.7: 150 -> 300. Ở ~80 lượt user/giây và lượt dài 2-3 giây khi tải cao cần ~240 VU; 150 VU làm chính máy test
+// bỏ lượt (k6 báo "Insufficient VUs") nên dropped_iterations không phản ánh server.
+const USER_VUS = Number(__ENV.USER_VUS || 300);
+// Mỗi VU user dùng tài khoản users[idInTest - 1]. VU tạo sẵn của mọi nhóm có id 1..(GUEST_PRE + USER_VUS)
+// (VU khách thêm về sau có id lớn hơn và không đăng nhập), nên cần ít nhất ngần ấy tài khoản để không có hai VU
+// dùng chung một tài khoản (chung giỏ hàng -> tranh chấp dòng giỏ không có ở người dùng thật).
+const GUEST_PRE = 100;
+if (['capacity', 'steps', 'ramp', 'spike'].includes(PROFILE) && users.length < GUEST_PRE + USER_VUS) {
+  throw new Error(`users.csv có ${users.length} tài khoản, cần ít nhất ${GUEST_PRE + USER_VUS} (GUEST_PRE + USER_VUS): ` +
+    `python loadtest/jmeter/create_loadtest_users.py --base <ALB> --count ${GUEST_PRE + USER_VUS}`);
+}
 function arrival(exec, stages, startRate, maxVUs) {
   if (exec === 'user') maxVUs = USER_VUS;
-  const pre = exec === 'user' ? maxVUs : Math.min(maxVUs, 100);
+  const pre = exec === 'user' ? maxVUs : Math.min(maxVUs, GUEST_PRE);
   return { executor: 'ramping-arrival-rate', exec, startRate, timeUnit: '1s', preAllocatedVUs: pre, maxVUs, stages };
 }
 
@@ -77,11 +103,21 @@ function scenarios() {
         guest: { executor: 'constant-vus', exec: 'guest', vus: 2, duration: '30s' },
         user: { executor: 'constant-vus', exec: 'user', vus: 1, duration: '30s' },
       };
-    case 'capacity': // 30 giây tăng, 4 phút giữ, 15 giây hạ
+    case 'capacity': // 30 giây tăng, HOLD giữ (mặc định 4 phút; nghiệm thu 15m, soak 60m), 15 giây hạ
       return {
-        guest: arrival('guest', [{ target: r.guest, duration: '30s' }, { target: r.guest, duration: '4m' }, { target: 0, duration: '15s' }], 1, 800),
-        user: arrival('user', [{ target: r.user, duration: '30s' }, { target: r.user, duration: '4m' }, { target: 0, duration: '15s' }], 1, 300),
+        guest: arrival('guest', [{ target: r.guest, duration: '30s' }, { target: r.guest, duration: HOLD }, { target: 0, duration: '15s' }], 1, GUEST_MAX_VUS),
+        user: arrival('user', [{ target: r.user, duration: '30s' }, { target: r.user, duration: HOLD }, { target: 0, duration: '15s' }], 1, 300),
       };
+    case 'steps': { // bậc thang lượt mua sắm/giây (STEPS, mặc định 230,250,270,300), mỗi bậc 30 giây tăng + STEP_HOLD giữ
+      const g = [], u = [];
+      for (const it of STEPS) {
+        const s = splitIterations(it);
+        g.push({ target: s.guest, duration: '30s' }, { target: s.guest, duration: STEP_HOLD });
+        u.push({ target: s.user, duration: '30s' }, { target: s.user, duration: STEP_HOLD });
+      }
+      g.push({ target: 0, duration: '15s' }); u.push({ target: 0, duration: '15s' });
+      return { guest: arrival('guest', g, 1, GUEST_MAX_VUS), user: arrival('user', u, 1, 300) };
+    }
     case 'ramp': // 50 req/s -> RPS_MAX trong 4 phút 30 giây
       return {
         guest: arrival('guest', [{ target: rMax.guest, duration: '4m30s' }], rates(50).guest, 1200),
@@ -98,7 +134,7 @@ function scenarios() {
         user: arrival('user', [{ target: rates(50).user, duration: '30s' }, { target: r.user, duration: '10s' }, { target: r.user, duration: '2m' }, { target: 0, duration: '20s' }], 1, 300),
       };
     default:
-      throw new Error(`PROFILE không hợp lệ: ${PROFILE} (smoke|capacity|ramp|stress|spike)`);
+      throw new Error(`PROFILE không hợp lệ: ${PROFILE} (smoke|capacity|steps|ramp|stress|spike)`);
   }
 }
 
@@ -243,9 +279,23 @@ export function guest() {
 // rồi đăng xuất. Trước đây đăng nhập lại MỖI lượt -> băm mật khẩu (PBKDF2 1 triệu vòng) chiếm khoảng 30% CPU cluster,
 // không giống người dùng thật (đăng nhập một lần cho cả buổi).
 let session = null; // { acc, left } của VU này
+let firstSession = true;
+
+// Độ dài phiên: phiên đầu của mỗi VU dài ngẫu nhiên 1..SESSION_ITERS lượt, các phiên sau đúng SESSION_ITERS.
+// Nếu mọi VU cùng dài SESSION_ITERS, các VU tạo sẵn đăng nhập gần như cùng lúc đầu bài rồi hết phiên cùng lúc
+// -> cứ mỗi chu kỳ lại một "đợt" đăng nhập dồn cục (bản 1.2.7 lần 1: 150 lượt trong 30 giây đúng đoạn đỉnh).
+// Phiên đầu ngẫu nhiên đều 1..N là phân bố "phần còn lại" của phiên ở trạng thái ổn định, nên ngay sau lượt đăng
+// nhập đầu tiên, tần suất đăng nhập lại đã ổn định ở khoảng (lượt user/giây) / SESSION_ITERS và không dồn lại.
+// Lượt đăng nhập ĐẦU TIÊN của mỗi VU vẫn dồn vào đầu bài (VU tạo sẵn nhận lượt lần lượt): đó là giai đoạn khởi
+// động lúc tải còn thấp, không tính vào đoạn ổn định (steady-state).
+function sessionLength() {
+  if (!firstSession) return SESSION_ITERS;
+  firstSession = false;
+  return 1 + Math.floor(Math.random() * SESSION_ITERS);
+}
 
 function login() {
-  const acc = users[(exec.vu.idInTest - 1) % users.length]; // mỗi VU một tài khoản
+  const acc = users[(exec.vu.idInTest - 1) % users.length]; // mỗi VU một tài khoản (xem GUEST_PRE)
   http.cookieJar().clear(BASE);
   let ok = false;
   group('U01 Đăng nhập', () => {
@@ -267,7 +317,7 @@ function login() {
       check(home, { 'U02 trang chủ 200': (x) => x.status === 200 }) &&
       check(info, { 'U02 /api/me/ đã đăng nhập': (x) => !!x && x.authenticated === true && x.username === acc.u });
   });
-  session = ok ? { acc, left: SESSION_ITERS } : null;
+  session = ok ? { acc, left: sessionLength() } : null;
   return ok;
 }
 

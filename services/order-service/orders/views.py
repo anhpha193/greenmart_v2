@@ -1,20 +1,22 @@
-import time
 from decimal import Decimal
 
-from django.db import IntegrityError, OperationalError, transaction
-from django.db.models import F, Sum
+from django.db import transaction
+from django.http import HttpResponse
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from django.core.cache import cache
-from django.db.models import prefetch_related_objects
-
+from greenmart_common import cartmodel, fastjson
 from greenmart_common.client import NotFound
 
+from .cart import (CartClosed, bump, change_item, get_or_create_cart, is_stale_item, load_cart, refresh_order,
+                   summary)
 from .clients import fetch_products, promotions
 from .events import publish_order_completed
 from .models import Order, OrderItem
-from .pricing import promotion_snapshot_dict, serialize_order
+from .pricing import serialize_order
+
+PROMOTION_FIELDS = [f"promotion_{f}" for f in
+                    ("id", "code", "name", "discount_type", "apply_type", "discount_value", "min_order_value")]
 
 
 # ---------- helpers ----------
@@ -37,63 +39,6 @@ def parse_owner(data):
     raise BadOwner()
 
 
-def find_cart(customer_id, guest_token):
-    qs = Order.objects.filter(complete=False)
-    if customer_id is not None:
-        qs = qs.filter(customer_id=customer_id)
-    else:
-        qs = qs.filter(customer_id__isnull=True, guest_token=guest_token)
-    return qs.order_by("id").first()
-
-
-def get_or_create_cart(customer_id, guest_token):
-    order = find_cart(customer_id, guest_token)
-    if order is None:
-        order = Order.objects.create(customer_id=customer_id, guest_token=guest_token, complete=False)
-    return order
-
-
-# ---------- read model giỏ hàng (Valkey) ----------
-# Dữ liệu hiển thị giỏ (JSON đã dựng) được cache theo chủ giỏ + PHIÊN BẢN. Mọi lần ghi giỏ (thêm/bớt, khuyến mãi,
-# gộp, chốt đơn) đặt phiên bản mới SAU KHI transaction commit; bản cache cũ nằm ở key phiên bản cũ nên không bao
-# giờ được đọc lại (kể cả khi một request đọc chậm ghi đè sau). TTL ngắn là lớp an toàn thứ hai.
-# Chốt đơn vẫn đọc thẳng MySQL + giá mới từ catalog (CompleteOrderView), không dùng read model.
-CART_TTL = 60
-
-
-def _owner_key(customer_id, guest_token):
-    return f"c{customer_id}" if customer_id is not None else f"g{guest_token}"
-
-
-def _cart_version(owner):
-    try:
-        return cache.get(f"cartv:{owner}") or 0
-    except Exception:  # noqa: BLE001 - Valkey lỗi: coi như không có cache
-        return None
-
-
-def touch_cart(customer_id=None, guest_token=None):
-    """Gọi trong transaction ghi giỏ: sau commit đặt phiên bản mới -> read model cũ hết hiệu lực."""
-    owner = _owner_key(customer_id, guest_token)
-
-    def bump():
-        try:
-            cache.set(f"cartv:{owner}", time.time_ns(), 86400)
-        except Exception:  # noqa: BLE001
-            pass
-    transaction.on_commit(bump)
-
-
-EMPTY_CART = {"id": None, "customer_id": None, "date_order": None, "complete": False, "transaction_id": None,
-              "promotion": None, "items": [], "get_cart_items": 0, "get_cart_total": "0.00",
-              "get_discount_amount": "0.00", "get_total_after_discount": "0.00"}
-
-
-def full_order(order):
-    products = fetch_products(i.product_id for i in order.items.all()) if _needs_live_prices(order) else {}
-    return serialize_order(order, products)
-
-
 def _needs_live_prices(order):
     if not order.complete:
         return True
@@ -104,66 +49,49 @@ def bad_owner_response():
     return Response({"error": "invalid_owner"}, status=400)
 
 
+def json_bytes(payload):
+    """Trả nguyên bytes JSON đã dựng sẵn trong read model: không dựng/serialize lại ở mỗi lần đọc."""
+    return HttpResponse(payload, content_type="application/json")
+
+
 # ---------- giỏ hàng ----------
 
 class CurrentCartView(APIView):
     """POST {customer_id | guest_token, detail?, prune_hidden?} -> giỏ đang mở.
-    Chỉ ĐỌC: chưa có giỏ thì trả giỏ trống, không tạo hàng mới trong MySQL (trước đây mỗi khách mở trang giỏ/đếm
-    giỏ là một lệnh INSERT). Bản chi tiết lấy từ read model trong Valkey nếu giỏ chưa đổi kể từ lần dựng trước."""
+    Chỉ ĐỌC: chưa có giỏ thì trả giỏ trống, không tạo hàng mới trong MySQL.
+    Đọc Cart Read Model trong Valkey trước (1 round-trip, trả nguyên bytes); trượt/tombstone thì dựng từ MySQL bằng
+    một câu SELECT rồi ghi lại read model (orders/cart.py)."""
 
     def post(self, request):
         try:
             cid, token = parse_owner(request.data)
         except BadOwner:
             return bad_owner_response()
-
-        if not request.data.get("detail"):
-            order = find_cart(cid, token)
-            if order is None:
-                return Response({"id": None, "customer_id": cid, "get_cart_items": 0, "promotion": None})
-            count = order.items.aggregate(s=Sum("quantity"))["s"] or 0
-            return Response({"id": order.id, "customer_id": order.customer_id, "get_cart_items": count,
-                             "promotion": promotion_snapshot_dict(order)})
-
+        detail = bool(request.data.get("detail"))
         prune = bool(request.data.get("prune_hidden"))
-        owner = _owner_key(cid, token)
-        version = _cart_version(owner)
-        if version is None:
-            return Response(self._build(cid, token, prune))
-        key = f"cart:{owner}:{version}:{int(prune)}"
-        try:
-            data = cache.get(key)
-        except Exception:  # noqa: BLE001
-            data = None
-        if data is None:
-            data = self._build(cid, token, prune)
-            try:
-                cache.set(key, data, CART_TTL)
-            except Exception:  # noqa: BLE001
-                pass
-        return Response(data)
+
+        hit = cartmodel.get(cartmodel.owner_key(cid, token))
+        if hit and hit[2] is not None:
+            payload = hit[2]
+            if detail and not prune:
+                return json_bytes(payload)
+            data = fastjson.loads(payload)
+            if not detail:
+                return Response(self._count(data, cid))
+            if not any(is_stale_item(i["product"]) for i in data["items"]):
+                return json_bytes(payload)
+        data, payload, _ = load_cart(cid, token, prune)
+        return json_bytes(payload) if detail else Response(self._count(data, cid))
 
     @staticmethod
-    def _build(cid, token, prune):
-        order = find_cart(cid, token)
-        if order is None:
-            return {**EMPTY_CART, "customer_id": cid}
-        prefetch_related_objects([order], "items")        # 1 query lấy mọi dòng, dùng lại cho cả bước lọc và dựng JSON
-        items = list(order.items.all())
-        products = fetch_products(i.product_id for i in items)
-        if prune:
-            # Sản phẩm bị ẩn/đã mất khỏi catalog thì loại khỏi giỏ (bản cũ làm việc này ở view giỏ hàng).
-            stale = [i.id for i in items if i.product_id not in products or products[i.product_id]["status"] == "hidden"]
-            if stale:
-                with transaction.atomic():
-                    OrderItem.objects.filter(pk__in=stale).delete()
-                    touch_cart(cid, token)
-                order = Order.objects.prefetch_related("items").get(pk=order.pk)
-        return serialize_order(order, products)
+    def _count(data, cid):
+        return {"id": data["id"], "customer_id": data["customer_id"] if data["id"] else cid,
+                "get_cart_items": data["get_cart_items"], "promotion": data["promotion"]}
 
 
 class CartItemView(APIView):
-    """POST {owner, product_id, delta} -> cộng/trừ số lượng; <= 0 thì xóa dòng."""
+    """POST {owner, product_id, delta} -> cộng/trừ số lượng; <= 0 thì xóa dòng.
+    Trả luôn số món, tổng tiền, tóm tắt và phiên bản giỏ để web cập nhật giao diện không cần gọi thêm."""
 
     def post(self, request):
         try:
@@ -172,28 +100,15 @@ class CartItemView(APIView):
             delta = int(request.data.get("delta", 1))
         except (BadOwner, TypeError, ValueError):
             return Response({"error": "invalid_request"}, status=400)
-
-        # Ít query nhất có thể (trước: SELECT giỏ, SELECT/INSERT dòng, UPDATE, SELECT lại, [DELETE], SUM):
-        #   món đã có: 1 UPDATE nguyên tử (quantity = quantity + delta), không đọc trước
-        #   món mới  : UPDATE không trúng dòng nào -> INSERT
-        #   chỉ khi delta < 0 mới cần xóa dòng có quantity <= 0
-        # Hai request cùng lúc thêm CÙNG món mới (bấm 2 lần): một bên gặp lỗi khóa duy nhất hoặc deadlock (MySQL
-        # REPEATABLE READ) -> chạy lại cả transaction; lần sau UPDATE thấy dòng đã có và cộng dồn, không mất số lượng.
-        for attempt in range(3):
-            try:
-                with transaction.atomic():
-                    order = get_or_create_cart(cid, token)
-                    rows = OrderItem.objects.filter(order=order, product_id=product_id)
-                    if not rows.update(quantity=F("quantity") + delta) and delta > 0:
-                        OrderItem.objects.create(order=order, product_id=product_id, quantity=delta)
-                    removed = bool(delta <= 0 and rows.filter(quantity__lte=0).delete()[0])
-                    touch_cart(cid, token)
-                    count = order.items.aggregate(s=Sum("quantity"))["s"] or 0
-                break
-            except (IntegrityError, OperationalError) as exc:
-                if attempt == 2 or (isinstance(exc, OperationalError) and exc.args[:1] not in ((1213,), (1205,))):
-                    raise
-        return Response({"order_id": order.id, "removed": removed, "get_cart_items": count})
+        try:
+            order_id, removed = change_item(cid, token, product_id, delta)
+        except CartClosed:
+            return Response({"error": "cart_closed"}, status=409)
+        data, _, version = refresh_order(cid, token, order_id)
+        s = summary(data)
+        return Response({"order_id": order_id, "removed": removed, "get_cart_items": s["get_cart_items"],
+                         "cart_count": s["get_cart_items"], "cart_total": s["get_cart_total"],
+                         "cart_version": version, "cart_summary": s})
 
 
 class ApplyPromotionView(APIView):
@@ -213,7 +128,7 @@ class ApplyPromotionView(APIView):
             return Response({"error": "promotion_not_found"}, status=404)
 
         order = get_or_create_cart(cid, token)
-        data = full_order(order)
+        data, _, _ = refresh_order(cid, token, order.id)
         if not data["items"]:
             return Response({"error": "cart_empty"}, status=409)
         if Decimal(data["get_cart_total"]) < Decimal(promo["min_order_value"]):
@@ -221,9 +136,10 @@ class ApplyPromotionView(APIView):
 
         with transaction.atomic():
             order.set_promotion(promo)
-            order.save()
-            touch_cart(cid, token)
-        return Response(full_order(Order.objects.prefetch_related("items").get(pk=order.pk)))
+            order.save(update_fields=PROMOTION_FIELDS)  # không ghi đè cột version
+            bump(order.id)
+        data, _, _ = refresh_order(cid, token, order.id)
+        return Response(data)
 
 
 class ClearPromotionView(APIView):
@@ -235,8 +151,9 @@ class ClearPromotionView(APIView):
         order = get_or_create_cart(cid, token)
         with transaction.atomic():
             order.clear_promotion()
-            order.save()
-            touch_cart(cid, token)
+            order.save(update_fields=PROMOTION_FIELDS)
+            bump(order.id)
+        refresh_order(cid, token, order.id)
         return Response({"id": order.id})
 
 
@@ -252,7 +169,8 @@ class MergeCartView(APIView):
         if not token:
             return Response({"merged": False})
         with transaction.atomic():
-            guest = Order.objects.filter(customer_id__isnull=True, guest_token=token, complete=False).first()
+            guest = Order.objects.select_for_update().filter(
+                customer_id__isnull=True, guest_token=token, complete=False).first()
             if guest is None:
                 return Response({"merged": False})
             user_order = get_or_create_cart(customer_id, None)
@@ -261,10 +179,14 @@ class MergeCartView(APIView):
                     order=user_order, product_id=item.product_id, defaults={"quantity": item.quantity})
                 if not created:
                     user_item.quantity = (user_item.quantity or 0) + (item.quantity or 0)
-                    user_item.save()
+                    user_item.save(update_fields=["quantity"])
+            guest_label = (guest.id, guest.version + 1)
             guest.delete()
-            touch_cart(None, token)
-            touch_cart(customer_id, None)
+            bump(user_order.id)
+        # Giỏ khách đã mất: tombstone với nhãn mới hơn mọi bản dựng cũ, rồi ghi "giỏ trống" thay vào.
+        cartmodel.tombstone(cartmodel.owner_key(None, token), *guest_label)
+        load_cart(None, token)
+        refresh_order(customer_id, None, user_order.id)
         return Response({"merged": True})
 
 
@@ -291,8 +213,12 @@ class CompleteOrderView(APIView):
                     item.unit_price = Decimal(p["price"])
                     item.save()
             order.complete = True
-            order.save()
-            touch_cart(customer_id, None)
+            order.save(update_fields=["complete"])
+            bump(order.id)
+            label = (order.id, order.version + 1)  # đang giữ khóa dòng (select_for_update) nên version + 1 là đúng
+        # Giỏ đã thành đơn: tombstone rồi ghi "giỏ trống" -> trang giỏ không bao giờ hiện lại giỏ vừa chốt.
+        cartmodel.tombstone(cartmodel.owner_key(customer_id, None), *label)
+        load_cart(customer_id, None)
         order = Order.objects.prefetch_related("items").get(pk=order.pk)
         publish_order_completed(order)  # sau khi commit: order-worker trừ tồn kho (chỉ khi có ORDER_EVENTS_QUEUE_URL)
         return Response(serialize_order(order, products))

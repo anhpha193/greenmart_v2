@@ -35,7 +35,10 @@ def mysql_database(prefix="DB"):
         # số kết nối = pod x worker x thread. RDS db.t4g.micro chỉ cho 60 kết nối -> overlay EKS đặt 0
         # (mở/đóng theo request; catalog/web phần lớn đọc từ Valkey nên ít khi chạm MySQL).
         "CONN_MAX_AGE": int(env("DB_CONN_MAX_AGE", "60")),
-        "CONN_HEALTH_CHECKS": True,
+        # Health check = ping MySQL ở đầu mỗi request khi dùng lại kết nối (profile 1.2.7: 12% thời gian của
+        # order-service). Tắt (DB_CONN_HEALTH_CHECKS=0) thì kết nối chết (DB restart/failover, quá wait_timeout)
+        # làm lỗi đúng 1 request trên kết nối đó rồi Django tự mở lại. Mặc định bật; chỉ tắt sau khi A/B đạt.
+        "CONN_HEALTH_CHECKS": env_bool("DB_CONN_HEALTH_CHECKS", True),
         "OPTIONS": {
             "charset": "utf8mb4",
             "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
